@@ -1,0 +1,4510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>活板</title>
+<!--
+  单文件界面，零构建、零 npm（docs/gui-design.md §1）。
+
+  视觉口径：这本书的工具，界面就该像纸。底色用封面那套「宣纸」(#F1EFE8)，
+  正文用「墨」(#1B1D1E)，唯一的彩色是封面方案里的「印」(#A83A2E)，
+  只出现在主按钮和警告上。不用阴影、不用渐变、不用圆角卡片堆叠 ——
+  这些正是设计文档 §1「明确不做」之外最容易让工具显得像演示页的东西。
+
+  换视图只切 body 上的 class（§3 陷阱 2：二次 load_html 会丢拖放监听，
+  所以启动只 load 一次）。
+-->
+<style>
+  :root {
+    --paper: #F1EFE8;
+    --paper-2: #E9E6DD;
+    --ink: #1B1D1E;
+    --ink-2: #6B675C;
+    --ink-3: #928C7E;
+    --seal: #A83A2E;
+    /* 拖放墨团那两团「墨」：写成 RGB 三元组，是给 rgba(var(--tone), …) 用的。
+       能处理的书 = 印色那支暖红，明显不是书的东西 = 墨色。
+       值就是 --seal / --ink，但十六进制塞不进 rgba() 的槽位，只能各写一份。 */
+    --bloom-book: 168, 58, 46;
+    --bloom-other: 27, 29, 30;
+    /* 背景残字的颜色：比 ink-3 还淡一档。只在处理中页的背景里用。 */
+    --faint: #B7AE9B;
+    --rule: rgba(27, 29, 30, 0.16);
+    --rule-soft: rgba(27, 29, 30, 0.09);
+    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+    --sans: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+
+    /* 印色的几档透明度。抽成变量是为了深色模式能整组换掉 ——
+       在深底上 rgba(印, 0.035) 几乎不可见，直接换色比逐处调 alpha 可靠。 */
+    --seal-tint: rgba(168, 58, 46, 0.035);
+    --seal-line: rgba(168, 58, 46, 0.5);
+    --seal-line-2: rgba(168, 58, 46, 0.55);
+    --seal-fill: rgba(168, 58, 46, 0.06);
+    --seal-border: rgba(168, 58, 46, 0.4);
+
+    /* 悬停底色、行分隔线、滚动条：都是"墨的淡淡一层"，
+       深色模式下要换成"纸的淡淡一层"。 */
+    --hover: rgba(27, 29, 30, 0.03);
+    --row-line: rgba(27, 29, 30, 0.05);
+    --thumb: rgba(27, 29, 30, 0.16);
+    --thumb-hover: rgba(27, 29, 30, 0.28);
+
+    /* 主按钮：浅色下是墨底纸字，深色下反过来。 */
+    --primary-bg: #1B1D1E;
+    --primary-fg: #F6F3EC;
+    --primary-hover: #33373A;
+  }
+
+  /* ---------- 深色模式 ----------
+     试用反馈"应用无深色模式"。三态：跟随系统 / 固定深 / 固定浅，
+     由 JS 写 <html data-dark="1|0"> 决定，CSS 只认这个属性（不认 media query）——
+     认属性才能让"固定浅色"在系统是深色时也真的浅。
+     配色取封面「松墨」那套 (#15181D 底 / 宣纸白字)，不是纯黑纯白：
+     纯 #000 上的白字会发晕，纯 #FFF 会刺眼。
+     印色提亮到 #E07A6C：原色 #A83A2E 在深底上只有 3.1:1，
+     而警告文字是小字号，要过 4.5:1（提亮后实测 6.3:1）。 */
+  html[data-dark="1"] {
+    --paper: #15181D;
+    --paper-2: #1D2128;
+    --ink: #E8E4DA;
+    --ink-2: #A8A296;
+    --ink-3: #77726A;
+    --seal: #E07A6C;
+    --bloom-book: 224, 122, 108;
+    --bloom-other: 232, 228, 218;
+    --faint: #565248;
+    --rule: rgba(232, 228, 218, 0.20);
+    --rule-soft: rgba(232, 228, 218, 0.11);
+
+    --seal-tint: rgba(224, 122, 108, 0.10);
+    --seal-line: rgba(224, 122, 108, 0.55);
+    --seal-line-2: rgba(224, 122, 108, 0.6);
+    --seal-fill: rgba(224, 122, 108, 0.12);
+    --seal-border: rgba(224, 122, 108, 0.45);
+
+    --hover: rgba(232, 228, 218, 0.05);
+    --row-line: rgba(232, 228, 218, 0.07);
+    --thumb: rgba(232, 228, 218, 0.18);
+    --thumb-hover: rgba(232, 228, 218, 0.30);
+
+    --primary-bg: #E8E4DA;
+    --primary-fg: #15181D;
+    --primary-hover: #CFC9BC;
+  }
+
+  /* 换主题时不要闪白：只在 body 上做颜色过渡，别给 * 加 transition
+     （那会让拖放边框、进度条之类的动画一起变慢）。 */
+  body { transition: background-color 140ms linear, color 140ms linear; }
+  @media (prefers-reduced-motion: reduce) {
+    body { transition: none; }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    /* 拖进来时整窗是落点，任何地方都不该出现文字光标 */
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    overflow: hidden;
+  }
+
+  /* 视图互斥。用 display:none 而不是重新加载页面。 */
+  body[data-view="drop"] #view-drop,
+  body[data-view="busy"] #view-busy,
+  body[data-view="result"] #view-result,
+  body[data-view="review"] #view-review,
+  body[data-view="meta"] #view-meta,
+  body[data-view="done"] #view-done,
+  body[data-view="about"] #view-about,
+  body[data-view="error"] #view-error { display: block; }
+
+  .view { display: none; height: 100%; }
+
+  /* ---------- 窗口边角 ----------
+     没有顶栏了。原来那一条 52px 的横带（书印 + 名字 + 版本号 + 主题）
+     是每一屏都要交的过路费：它在，内容就矮 52px —— ④ 页为此差 28px，
+     把四个封面动作挤出视口。而它回答的问题（这是什么程序）用户只问一次。
+     现在只留两样贴角的东西：右上角一枚没有框的日/月（决定5），
+     其余屏左上角一枚「书」印，点它回上一屏（决定23）。
+     首页两样都不要 —— 首页本来就是空的那一屏。
+     用 fixed 贴窗口边，不占版面高度；pointer-events 只在子元素上开，
+     免得它挡住下面整片拖放区。 */
+  .chrome {
+    position: fixed;
+    top: 0; right: 0;
+    padding: 10px 12px;
+    z-index: 30;
+    pointer-events: none;
+    transition: opacity 200ms linear;
+  }
+
+  .chrome > * { pointer-events: auto; }
+
+  /* 主题按钮：一个图标，没有框，没有底。三态（跟随系统/深/浅）点一下换一个。
+     贴在窗口右上角之后，它的视觉重量必须低于任何一个正文元素 ——
+     14px 的线图标、--ink-3、悬停才升到 --ink。 */
+  .theme-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: color 140ms linear, background-color 140ms linear;
+  }
+
+  .theme-btn:hover { color: var(--ink); background: var(--hover); }
+
+  .theme-btn svg { display: block; }
+
+  /* 页面顶部的那一行：左边是第几步，右边是文件名。
+     步骤指示原来在顶栏里，和主题按钮、版本号挤在一起 —— 三件小事并排，
+     顶栏就成了仪表盘。挪进正文之后它变成"页码"，和这套纸面语言是一路的：
+     书的页码本来就在页脚/页眉的角落，不在书脊上。
+     只留两位序号，不写"N / 5"：总步数是硬编码，加一页就会谎报；
+     而"这是第几步"本来就在序号里，分母不说也知道。 */
+  .pagetop {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 26px;
+  }
+
+  .pgno {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pgname {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    color: var(--ink-2);
+  }
+
+  main {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- ① 导入：整窗即拖放区 ---------- */
+
+  /* 整个窗口都是落点，也都是按钮（决定3）。框自己接 click，里面不再挂
+     第二份监听，所以不会点一次弹两个文件框。 */
+  #drop-area {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 48px;
+    cursor: pointer;
+    /* 墨团要跟着光标跑到纸边上：跑出去就裁掉，别让它在窗外面撑出一截滚动区 */
+    overflow: hidden;
+  }
+
+  /* 四角裁切线，代替原来那圈虚线。
+     虚线框是"上传控件"的形状，每个网页都有；裁切线是"纸"的形状 ——
+     印刷里它标"沿这儿裁"，正好是这本工具的语言（宣纸、墨、印）。
+     更实际的好处：它只占四个角，中间那片整块留给字，不再是一个
+     1013×530 的大框套两行小字、四周全是空白。
+     尺寸变化是给"拖进来了"用的：角往里长，像纸被压住四角。 */
+  /* 26px 的时候右上那根裁切线正好压在主题按钮底下，被挡掉了一半 ——
+     四根线断一根，看着像渲染坏了。让到 40px：裁切线退到按钮内侧，
+     四角齐了，框也比原来那圈虚线更"外"、更像纸的裁切标记。 */
+  #drop-area .marks {
+    position: absolute;
+    inset: 40px;
+    pointer-events: none;
+    transition: opacity 220ms linear;
+  }
+
+  #drop-area .marks i {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border: 0 solid var(--ink-3);
+    transition: border-color 180ms linear,
+                width 300ms cubic-bezier(0.2, 0.7, 0.2, 1),
+                height 300ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  #drop-area .marks i:nth-child(1) { top: 0;    left: 0;  border-top-width: 1px;    border-left-width: 1px; }
+  #drop-area .marks i:nth-child(2) { top: 0;    right: 0; border-top-width: 1px;    border-right-width: 1px; }
+  #drop-area .marks i:nth-child(3) { bottom: 0; left: 0;  border-bottom-width: 1px; border-left-width: 1px; }
+  #drop-area .marks i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 1px; border-right-width: 1px; }
+
+  #drop-area:hover .marks i { border-color: var(--ink-3); }
+
+  /* ---------- 拖放：一团墨跟手 ----------
+     拖进来的东西分两类，只按 MIME 判（dragover 阶段 pywebview 不给 JS 路径，
+     扩展名也拿不到，见 TODO 第 3 组）。能处理的 → 暖色 --seal；明显不是书的
+     （图片/音视频/PDF）→ 墨色 --ink。绿/红是通用软件语义，不是这身纸墨的调子。
+
+     两层，都是 pointer-events:none 的绝对定位方块，靠 --x/--y 跟光标：
+     .bloom 是一团径向渐变的墨，.ripple 是一圈从墨心荡开的环。 */
+  #drop-area .bloom,
+  #drop-area .ripple {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 560px;
+    height: 560px;
+    /* 让 translate(50%,50%) 时墨心正好落在 0,0，之后写像素坐标即可 */
+    margin: -280px 0 0 -280px;
+    pointer-events: none;
+    border-radius: 50%;
+    transform: translate(var(--x, 50%), var(--y, 50%)) scale(0.88);
+    opacity: 0;
+  }
+
+  #drop-area .bloom {
+    background: radial-gradient(circle closest-side,
+                rgba(var(--tone), 0.16) 0%,
+                rgba(var(--tone), 0.11) 34%,
+                rgba(var(--tone), 0.045) 62%,
+                rgba(var(--tone), 0) 100%);
+    transition: opacity 300ms linear,
+                transform 420ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  /* 第一次显形那一帧不许有位移过渡。transform 上那条 420ms 缓动是给"跟手"用的：
+     光标移动时墨团稍微落后一点，看着像洇开。但兜底的 --x/--y 是 50%，那是相对
+     墨团自身 560px 算的，落在区域左上 280,280 处 —— 带着过渡显形，墨团会从那里
+     一路飘到光标，像从别处飞过来。所以第一次写坐标时挂上这个类，写完立刻摘掉。
+
+     只掐掉 transform 那一条：淡入留着，墨团在光标底下慢慢显出来才对。 */
+  #drop-area.bloom-snap .bloom { transition: opacity 300ms linear; }
+
+  #drop-area .ripple {
+    border: 1px solid rgba(var(--tone), 0.30);
+    transform: translate(var(--x, 50%), var(--y, 50%)) scale(0.25);
+  }
+
+  /* 默认就是"书"那支暖色：一来平时那团墨 opacity 是 0，看不出颜色；二来没这个
+     兜底，rgba(var(--tone), …) 在平时是无效值，整条渐变作废。只有"不是书"要改色。 */
+  #drop-area { --tone: var(--bloom-book); }
+  #drop-area[data-drop="other"] { --tone: var(--bloom-other); }
+
+  #drop-area[data-drop="book"] .bloom,
+  #drop-area[data-drop="other"] .bloom { opacity: 1; }
+
+  @keyframes ripple {
+    0%   { opacity: 0.5;
+           transform: translate(var(--x, 50%), var(--y, 50%)) scale(0.22); }
+    70%  { opacity: 0.14; }
+    100% { opacity: 0;
+           transform: translate(var(--x, 50%), var(--y, 50%)) scale(1); }
+  }
+
+  #drop-area[data-drop="book"] .ripple,
+  #drop-area[data-drop="other"] .ripple {
+    animation: ripple 1600ms cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+  }
+
+  /* 拖入时四角裁切线退到后面去：这时候画面主角是墨团，角是配角 */
+  #drop-area[data-drop="book"] .marks,
+  #drop-area[data-drop="other"] .marks { opacity: 0.45; }
+
+  /* 拖入时右上主题按钮与右下「关于」也让位 */
+  body[data-drop-active="1"] .chrome,
+  body[data-drop-active="1"] #btn-about { opacity: 0.3; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #drop-area .bloom { transition: opacity 120ms linear; }
+    #drop-area[data-drop="book"] .ripple,
+    #drop-area[data-drop="other"] .ripple { animation: none; opacity: 0.3; }
+  }
+
+  /* 首屏只有一句话：宋体 30px、字距 0.1em —— 宋体的横细竖粗在浅底上很像书名，
+     这一屏除了书名什么都不该有。 */
+  /* 一句话的三个状态叠在同一格里：位置、字号全不动，只交叉淡换字与颜色。
+     三态分别是「平时 / 拖书 / 拖了不是书的东西」。
+
+     用 grid 1×1 而不是绝对定位：三份字都放进同一个格子，格子宽度取最宽那份
+     （平时态那六个字），所以换态时字宽变了也不会把版面推一下。 */
+  .drop-title {
+    display: grid;
+    font-size: 30px;
+    letter-spacing: 0.10em;
+    font-weight: 400;
+    line-height: 1.25;
+    /* 字距会把最后一个字后面也加上一份，整体看起来右偏，用负边距抵掉 */
+    margin-right: -0.10em;
+  }
+
+  .drop-title span {
+    grid-area: 1 / 1;
+    justify-self: center;
+    opacity: 0;
+    /* 纸色光晕：墨团可能压在字后面，没有它字会被吃掉 */
+    text-shadow: 0 0 18px var(--paper), 0 0 18px var(--paper),
+                 0 0 10px var(--paper), 0 0 4px var(--paper);
+    transition: opacity 200ms linear, color 200ms linear;
+  }
+
+  .drop-title .t-idle { opacity: 1; color: var(--ink); }
+  .drop-title .t-book { color: var(--seal); }
+  .drop-title .t-other { color: var(--ink); }
+
+  #drop-area[data-drop="book"] .drop-title .t-idle,
+  #drop-area[data-drop="other"] .drop-title .t-idle { opacity: 0; }
+  #drop-area[data-drop="book"] .drop-title .t-book,
+  #drop-area[data-drop="other"] .drop-title .t-other { opacity: 1; }
+
+  /* ---------- 关于 ----------
+     自用工具，「这是什么程序」一辈子只问一次，答一次就够了 ——
+     所以这一屏不做功能说明：没有致谢、没有许可证、没有作者、没有年份。
+     留下只有一枚印和一行版本号，像书末那块牌记：字越少，越像一件成品。
+
+     内容总共 165px 高，永远比最小视口（520）矮，所以垂直居中直接用 center；
+     auto margin 那套是给会超高的错误页用的，这儿用不上。
+
+     这一屏还隐掉了右上角那枚主题按钮 —— 关于页是全站唯一没有窗框的一屏。
+     想比深/浅两版印色，Esc 回首页切一次再点进来。 */
+  #view-about main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 印面：一张 264×264 的 alpha 蒙版，底色吃 var(--seal) ——
+     颜色不写死，浅色是 #A83A2E、深色自动变 #E07A6C，两版一次写。
+     112px 是三档尺子量的：88 字口糊、136 压住版本号。
+     ★ 蒙版图必须是带 alpha 通道的 RGBA：灰度 PNG 不会自动当遮罩，
+       会整块糊成实心方块（这个坑踩过）。
+     ★ -webkit- 前缀与标准属性双写，WebView2 两个都认，缺一个就没效果。 */
+  .ab-mark {
+    width: 112px;
+    height: 112px;
+    background-color: var(--seal);
+    -webkit-mask-image: url("data:image/png;base64,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");
+    mask-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQgAAAEICAYAAACj9mr/AAAcJ0lEQVR42u1dW5LjqBLlVvRSoNci1V7kWovsvUheC7CXvh8txzCM3iSQwDkRip5x2bLMI8nnSSEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgB7/K+hZpRDCnnyfOPle9/3C+9zW62c/7//dfy6baKyk94x25W9q+f9547m65T3+fczOmNmT4yc2vk843/n5rFn+Wzp/d19f+83vk+P1GQf/XiLCmgtZ3xAQK4vl4UzCvFwuemex9M6iee0s+mG5PotCeQtQee83zqawy/ccva9f+bv/vqONJbyN6H7n1qJy76d2vnvt+XtnU0khxLTzG87CFyTGe27/N939vufy2d55bV7Wz9Y4Dcvf1555XhFU7rP33r+zs+7sjfVtl9/wFsDpwfsTeE0bC+MPrtVr8IRo6b9n2lgDMX+fPljX4/JM+sZnAQeaaMK6FQGhIQw2F3e3LOIafsuaGRhjjfnXuPG93UUhDRxI2j8RtIgOgqAZYRdbQz0jKO6sa73x2aT4Yi4gjuy4x4ZPwrU/lWdjDjvvbxlPx1dQC47WT5/gGR4r2sTZ9aewLLclu142s75gNvg2pYxwYuhK1O+18azR7BqdtZTbF6Wd5znzXu2YfBAKy4R1i0ngDtLaAMoDs2TLOakDJ/jzvVDhy3bAfjCd2KQcHK3NQXpScm1Q9M1B6058b6iA6A4WFy6e2sSV9TAx0qpka8LhaCOGStXOsf3khVPjalRkwMbL6oQMiWaVFPYeW9McQiZeH0jUYWOAqU59iZwKNjkOoSbGnm9qjJwrMUGLoA9djicGaorszEPItB4/hNxZLzJSrsR405clkfx0/uSQmQTEsBJtwcYrT/M4SgYbIibW6RuHZTOOyilyEoxM6DCCk7INLWOMZGJoAv9JdRgihn9kok07Il27mQzMkVGeShP+Bx1JXZywYXERr6uB2fOImsu9R7FeVisOyoRtopRYQNwu5XbLoo1TYv8U/y6DFstcPjBst6A4ckakyHs4UqtGnGjFZCamNjNbuiR4HdbtQNj71/P9h0gmHVVJMhy8SJS6fGJ0Xgakr4WMToLJ1Khm4f5+1++id1KJh8Rl1NAitkOqOtN438KvhHaqOFEW+6Haem+U7v4sl//6s1DbfY3CbF6hXnPtenuRD9GKvxRognCc4EM4N0Yu3eHbmQe5/P2sb21ugZNSH/Az/g40YZ5E9fPzDr+jXRF4WxtW7QgCkcnZNBE5fB/OYg+Zs7libo0fwvnoW+CpHCPbV12CFG6BJDU281WDM/Gsb61rvUiry7wBOmSxXsry6xjRCZYebZg4+yC+EgsIEZla63nTpHg3RCsnTsbb98xB0LIf+5YEcf6DbLlIq8tYLSoFmMJzaFwjckOEOBnNmVomiNEZS8pH0R4GAjKWjlFLgz+Fp0PLk20IRM1hzr1T+hXh+37EflcrkTGSIApK69372ztwPaiI6v3d+xuvraB7L7kRmZqd1183mbfNzvOq5TvORkaKFBAqQ4zXnlgkfSQBxV2bC0XouEligfBcyRGRnjCSJ0LPR4fGVs5JCp9Mn0NACAap1l3G9O4W25xpAhNDZ/Y/1EQFL7lnU+YOcY4ZN4OG/yFL4dBE1HqgpTqlqeYwp90xJR4RTwP4GOJ1kpKZPvuobF5VYrOsyNZ7z0z2toX/IYvwtQFp8O9GhXaWXIgvJn0SVSQtwhIUkdUkHBSjZCKKOhlRSWIVW3wxy/LrWhr8SrS0mGp1CwICZrC45rn+cAEOBAKjQyZllMIonaFmZmp8bkaE1+KEtHRjXnGRgJhFZ1gLLQuI2tcoSa+K6aagmAqVzlKs9xV1F1bndEUXTnf0MTLLt86wFqaGNesJKm68+PtAVIAknQ3YHWzekM2zxiOpHaq5rVJsXQiBKgTEPW0KnJQiHlnqdJHv0Sd93eNHcP/eZdaySmnkUhQvI6ODE6zWEdmUJ+bNTYaGBMQEAXFLUA6i4kzK3PgWf8NrzwaSmBCeK6P0QHF/0F8JF5MhGpCQSsIPM3YsJmyJtX/a+Zr7Gfrl373SbrPx996rCnXZq6Xz3t75HuGUhqNT3E21ckpYYDUyc95NjXR5khl7cYyRIzs6ssO4azVRavBCdVMiZ42GgCgmD0KD4q5eH8SezTovJoN13vc4SJOWFTaAKSEt/MOg9CBqKvO553N57RlpHCSa/fD2QWxtgHlxHm51g4rtUHw7i1M0xLhsPLtZeHa12Gj+Q+WcfC+XXLnfZ977jWpGezNCBIjyciGGm6HRsUIilTFBCFYWHgLsGmfQHlrrizHcrJOnJpl5Ve5ZNgUSrXyvaJ0cq0ANsaY7czJDvwplM/oMJOWp+CZYSCFNU1TkRrKl5S2ssZD1DZTkf28InCwNi74yk5U8AhNxeuIc/VoJSdAJS0TltngQr78Xl8S0r4zmxfNg4ZoLE0TFcjwjk5IV5sYIgFxH8LMlRikVkH159v4zgTYhIRxYwTf7FEPzTRA7y8Vy2PUr2nJTxVo6UnRBe4lXqSsqJQPGp5rKpAeC6NVYWPs+FGuJ89GF+cZp8cyooklwUbJbR0q02Zqg6L4Y84Vw1/PmQHeFTM4Z9u079ncNDsqBYH4M2haUx2rdX2zGq25MtMowATFOK1XYKUhpmipEp9qkvb/aCMTeKPM2BWkQBg7Qok0DkSGqU30mpbzhk3hcjG6kbixjGBGwlM490KPPSTsahCLaFK/FLzEz1Qgss9OhB7GMQMJbgbT3OmLH8LshPp2RJwGhzuO5bblYa6w9imGIVWq7UdBTKs9iH/neI7MT3SUIGhw28U9PDwWfhGiack4nKNXWGVidODNKaae14afHx+BsUO1R/6/14QgtkJMB1GxjI4zhTbaJnCK1FJMHPStSU9BJRvR3tdH7TwzNt1JaDbB3UpoNlXGKkIRFWXGKugoRLfEJELzDvhw4KRXBopkZbey+gT4TJtMYy0KjD/NyGXBSitv1AoP4m+PwbrSJy9xIvwSVqSrUbHBsnmGt8vtimJVeGG7y3+ysS7si4PplvStkhF6zPTWxDa8z2KldA460KVOrgSlQ++gYaSHyomNat6xBuNL7I+ltoWHGkESpu93H3M/KBKe0LLQS1DJ7nu8LLfhmCIh/n6Y/jATE7Dky19RVE7gIPwtG7ggdf/NvfeeHcOTBdKOqxqsyxUaPEHHQO0a03nrvriopA9UyuRN3lzsJPrKiMU+VMTqVRPsueHT51rW33ZORbc1QAdFV3AdRMxMQY2npxkzmaGqNtJazjTuLegpjXowK0kTBqfC550i2RhgjiLkiDGjaigiNtRDKjTFHqmYBYQtaSOgjgUQpDk2CRGuclI9MmkjX+GaWFSVKqcbnqepU61cmKdlHNm8EMhdZUOtBc6vAB2EivXcvOeghjsNjj4pV2ZnZKalgYtweF9uCk9Jk8Fg/xT8NddYmB46zNFoJKl3DxmWoOZNyiOyHOEpTVk504uXlw7cSTms51foTJrQrB4Nr+vTOOpJelqxcyaCdnfdZsHyLZBl0MmJCkN55Hl3ZuI8Xx+VPxKK6LlORmExEyDNEJrQZW6O9F5lCqaoRs0IeaG1PZyyUEOL38t8mkgloM9b2KMY5Hpbr+H1VtBmemZK0SjQFPubYz7Lo3s7ie4u/RWMAv0PQQED8l9BDXCAFeYAWTexFZ4TT79QGhCNtbQlBAiHrqlOtheN8VASLsC9ci5CLvdpvaFq20LCrqbT7uBRMncO/GPMAyAA793vRAvqbduGHTHfvpJUeP4QlshNd73rvLQy7stHW3tNHzoswgQlz0jkEbCKSmxo0AwvCmH8P2jtwIb7EXw/xHMBuNa8Qxsgd7sLfIizS059cSH1kNXRPoIcKmZ8NT76IRHRjK/FdVJ2FqjPW/ncJ+050zHs3dIEcmWPG1nt3v3tkztU5oi9GXqn/8cw/E0hhW4k6+3LGyzgh0Z8Ci/sUTAxRXaJUl/h0ys201NXcBJboZB0jrL3JudbmUyfQIKaG2bTYCYg7FHgpWu8NEBCHQnMiNG+3+EYHjx5fXpwbGcnEkDXzQdwJ0ahC+SmkQCETd3Pt6SSJ+d/38hLHPq/1Ec1TtqbDF+My375ArsYQwabA6xiNP8J6kYCfAD+WyJQhOYC09r8CoiskPbskTcCA/7FIargepLXidKowFX6wcSEgCOfJEGpoDw6RmC/mam0KqTkz+a3goDjWxgwDE2tO2BHctERaOwdEP2RBJzc0AcGuQEkS+rasiC/k1UrExtRe7m0CB6vDXmmOlUhGuEdM6n1DOCfKe93WHuYMXdRzJG2iZ2JiGNDFRRtbRSggVaZqzurzICzRZp4qzRlQAhoEtLpGO2tRntSfKsuRqZMSiVK8hBl1Lw7TUlvBr8LZkibY+E05USWB9jpH1IQlBAQv27cXf/PsO0aZhZJ5mNM2qFEY5t3BjIhDw1h1qvUdByaHE9UyNzHMjecanFYBkoAX5KxQN0RjpIhTli2xALMnxiFHb1uRqyrvbN+K8WIV6MCgzLpLVO2a4vk64t84XCyNl0Tl9BNR/4qjudKR9kfXQqLUlRPue7l+ln8fJ0++J1O/hCg0VPhk1npPEdbgyAaqVosSEOZClaVdee33STWrVEZq04CzUN0I2xmCMTIbrw3EkS8LJ2V8KTkfCI8zdfkyY9Shr+gUsZE1iD5zKf3zZhtBs7FuvwkPCOM9Z1e7gJhPvscSNMhRBaqLBsVYh3M5RxhbigQkCieiOtC25toTpQwxCe2jsnLi98XPGueK2Q2bai7vRLJkIqGtCObcJjDZqm+cc9Z/YBNmQMobQk7tlOiGLJRPwx/pnW5uC/q1Jj2d894HYUMiVYmfRkbyqSkidjIl0vSKYS0gYk/S3e/qTwiiT7s663XUojpBQqnw3s7C+dDV9wXMly3UT/PhNP1c1XJ5/BLlswOpSAlc88bkW6cjtmDqWNwLCyvGz54ierJ1SLwChLJI5NhGd++LoScVUZUt+WTYY+2WGU9re3HB25r5Hld6saK7t7c41jpx9wkjCXYnZGUr5V5UjGoObIZn4FaJ2XOu+M2VB2GcztnPCE4rGShMZiGqyJicmeVBcO6V0oMzhE81p5st+Y6wIVWg0HmLemEaXPCGqZkhL5rUphXCGOn5HPqbiSsp7GRRWSKSLZjERlZmZkwXheTcgg/COB5jGal5jeE86IVoEHsRHipyVnnxGe5mPdoIDnJBUOGsuGu2X5nVyYEBMYaplBVIMtSQJMyqoIOxiVTro1OAQgW+IpkVB3LQhKaSLNgHcffwuJKpOCQQDtON365y9OfMVaxld9R7k7GpikB37CoLyMzFPBwZWXPg3uA5i4B4O+3E7M4PptAgTOBismCKrooi/+pvlhE1hx58EGKXyUeJv1Ry44YdJjP02mipR6bMGJ68mkkpM/F99okjFjGrcosREJ1jUnyKXEInB30w4woDQzzuJpNKbW+0VJAJIxZ7+6HJPAhOtretOIqhAlOtRWN5ELG+63Gi5ked5AMVtVZzKqb3NMTCSzoFONa5v3Ics2ZDcPrvsZn7dtjIfgibaJP2Nz/zJtIe+h3B4ZbpS6cS92elFKHqnJ3hAuW9uNBjYe0eY+BzdTcXgo5AUz8GCIKte8pAeveRiC5+vDg3d2nl9Y22C5LQ97D2HdPKfGnvGfTNeUPrPYZq8DPSadtXnGxlias/BWFI3iYu5X6uZI0q7+8WnJQ0YSab2NHZMQwJxiyVNpnuY5jziooLfoTe0VT1CUGi0Lw3T7k3xQkZc/IUcb9P00AoN/TAiO178Bs9qZOaZNdaLYZgyFdgGHrXJeFvsRl/k7w4TzZD896XiK893M2B6NHdm0eokRuZqqrEvxOaKCUTVhqnGuOXEMik5FylR1GsNReUYmwYCT7LTFBSzuPrpEZgLhaTNd96L3Uyj2TuEKypEM1E1jg4CYgZvTnr1SxkxTRxilHUQDIj+X0TH4jPQqM41aRay0jPpZgtdFXAmKUQjjFNnhitHH8ONAkLDUI0U+SkGGoQlpnA4tpJK2YS0oNQ0M5IlEpv/80FaBC5ThpqVirJ1Bz9Yd5+QDicKtAgGiQ0SSmUr0RpDLOK1LlQ4ftNNJYSiVI8Tsm5kt+mIn3eFlbNaRmo7RRCoocGkV6iGvhS2EZmVEWJUZbAESqRScnj5GQffmLKNFWappU6i/Fd2lr5ysxuxMFsUQXYsX2F5d4qoeCVDNKqKUwaVbOA4HrfEijmJLHgspkW5NXaChVxrnLVQLwScnoWIyCsqLs5DNdEqdAFZSom+JkL7LquahYQMaSfQfizKMEe6ttRhM9hCXpcpNZeZCudtTgtYCv4h3BNpZ3KFTPNU1zIvOzF/VZ4lgtrde0CopXQpWU2DjLhfUwEX8xMxBT1DGB5+rkxPzPKvdNvcEPUVLbGBr6mUlLimZAp6llzSfgXbOdk3xfSXi1X7YOKPE42U+s9GdC6gbIb/HzxEJpR7p1+g9tEJ6dqtBluyEaVkXJdHjdNiyexIH4faCCPRSjMQojftRdr9Uy7a5fAj2CJn8syMTGOemAqoueh0CD6A7NDEnNGzOJvtON7uao3MWQlnvdSk6245pk8D1T6WBrQSKg1qcBnXSvk6iP+/qJ9EIZgY5rKyFSpxzeU+l4Rkur0y2b17zeuvN8SzueDmGm9j5DZ+cx9+HCMYswEG1NlaABcSqr1TNSVmvJ3PMTfxKNxuXQkCri743qmc1poR7jXxtw0IyCMoO9qJCP14JAVR2Vmor6Slvh3qEUoPCJoZCbwNzwuRDkEMT2dhQZxz7ssiTQIis/bgsyLd0a/imEmYAeiFnp3zRb2GZZfBdOOS6KFaAvgg6BqvUfVm8QWlvptdjb0eDO0KQJb7omdqMbDee4eAiJvVpkhcDhx1SBswOI1EQSiYViT8lhxknbLa/MNbZIi+vBa7qOWOdO5Ihol98WwDfFnWsGru5mtLAz9WITPtGzGOdBJShF9eDvP4AqKzzN2reVBGMIS8tba28dIEBoaoO9fO8SoDoeBiFxm9oT25xnnFEKCC+XcnbZnVD4IVXErQRXgjVcVJYbleN4H0fc+Ivo7iiCMmcW9VFKqPH1ZQHUmFaNUf2LRDoy5ClSDgmkvsqFiC7+vxBKVSjhQ2sgWbQX/9bcnYxLd0vCMzJ9pavJB+JTfc2ARykAkuQ2B0JCFnLhHadZP5idqX5jmcafm46oWYWsKc85Ei7EjnHSKPAhViLZgDwqwejQQYuuLWKv6pBJAbASECnBKXjnpbGJveylOu54oPb20/h65BfhA2L7vuSKAtHPJUgWEm7IaYjtNJyIiNoMjSRQkJLJ4xDMm0+UW4A/Ck/7HyYvwyYhUINs2m0SpPoBqvCdeRCVUcxri06zzxnUUaBWQQkhMhGbxR1AYYm4KFgJC3dA+ppOCxVTGgRnCsDVvCMTZKa+ebmQN2sLyQSwj7W0iXndrZDPFERhJIcQf5xovnnh/Llzyxokaeo+P6fMnwqUJx53qmgLMzJDvlQFm6R9G1xjBfKeYn6yYbky0TDDwa4u2Y7QZOwiIYEHJTUD8iXDK65U5GkLNjV8FCJWzqud3ZlXSLqp6v2IKGUe9d00G6b32+bd3uk/bilK/baZqX8MwhDssfgRBHOHoHXOmd9bZD/O9LkbvNBguvD+mujZEuKdcTkvpnRSp2asGhiqyvvmdA9Ha43TFKLbqNjSmjruA6C6qWdMJlbMjFlxF23AJN0YOASErMzEoBN/eAaUp5uwXUzX1KKuP0qToK+7tya357d0CuydBN27BJIej38g/eVVQVk8ayZhuSnwt4qvgQyUComOmGsvEzsmYY3B3vEZix+/ZPdSVxiglvY3YOXH5nojY9mix1iIIROUJRiWmd29xncyJciSepWkV484JMUYOr121zztRT5ESNw1CJ84X0Jm1B33RLzRE0h7ZJ09pRg4dmThGDQFx/XkmxlGcLWHWrXznePGZNCcTozQB0SXQHrSoB9zCnF0iv8MdbYVyXX7C3FvrNfZBOK6MZ/UahE64aWrRICZmAmJIqCnqTCbEWUGpnc9P4h+26tAxkKU63cdM6b13FmgNAuJOmrqOPBdDIk1xzOhjuCoo5ErFcsjJ30Wu+xBcQ25DQnV7QJJUtlqMsSC/Q4zwpAy8f1eicHAnTztqVSrzYsxkztTmnIztgwi1lYcMUYoYWbfTynfIG36X4qJx3c2TrcuguZQc6uyY1hDIiJqbjCQIhw1BFtP5t+Zg/dQvfXKFuhOCZWhh0U4ij6NOF+qLCPHe643/phSeOpLWpiNpBoMnMKRXjBdzHscV56X/jJ3n9Cx2Dec4ySWBA0oWJoQ18yrEKYLvYYjoeJROMl9OoT/l0IR/FcAsbDOyCX+4GmbxT8GQ3ZhAt8DMeim10uuEZFd4IXzW77XfLr3PSK/uXyWcyzdxJ7MXo5T5D/nr0+mF+S3yFt19L4JKBaR5sxYQhhGD85379M5vsN5CVxHz+I1zf8mEyl0yqhAdIo2FT/zTE1dcipukMNPJ3zsT1i0Jrok7uvAqvlqvKYKvYEg0x4Nj3/8pNPQ9OHtJr+ROdKIR59kIAUFuW+cmjJkIDwMdKNimk58ZCugYJktP8JOVMDqXLBwkUQJVLPo3Gdkx2d24R9P4SuxoeS62kW/bPUR9XZ0NQ14FS2RHm8x+oYGoE1gfkSgXIEqJlc7/j0QFKzlNjC5DNeGV55oYJ0pNO8S+kkADmi5qDyAUEvlrBeSBn2K6uSDHDCp8x5hNeSKs7oxd7u1yK0yR8huGg3kcRD1VvaLkVODupNNoYq496MjPoUX5lO0dk65Wckeb6bA98zoqR2ci5IXTVjNchNrbuFMh/RhyCQnNyGGrV/5/xBbloTl0zgaaTi4efcKnMTJqqSYjLWaOkRFO7E7cGtkANxyTPnffdCG8NjpqYuyTWgcsMN1YCHXyHLTDBlMS5wsaBBMBoR3BoAMXpU6khl7xkncMNuyY0RlaqnB0qyM7OCnrIVHlIBxq2CC1pYNPgZ+vqQ0jBMTJSR+xeYI2TAnPown9QBAQFVGhnU3C6XDK33K8Tsz8BVfIXiAcCirY0gQOQr2SYXeFrWjAaX5JQAwn54STUJsgHMoUEjJSn4zuQiHQxDxJaS1WP3ph1KmwKtDUGobO3IMFyESjtSfhx5Px7Ymx43H0zKEtj/oA84ddrwtA8Oi4pS84Qv2a/jsajGaYrNN52gb8Kv8WsHdrOSAgGKZf65N5D9NB5Z8+WDjjTeGQavPdNdlSp5pzHcMRfVHo8D+Gvone49z78DK+N8hb1+7z3GDesd5ryuM4sA4H5Cz+Sx4rvc+aFbLT3ntu93X3OYzDbdk7fBlvQZPS3jskucr5PpfnUnrEvP7v7D0iXbMzju54mhViXrvCgtSvzIPwPmc8AmHrfG5eGcPXzpg8Nn6r8uZmDiRLhoCoSHsRBOzZ+I0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACM8H99pZte6ApwqQAAAABJRU5ErkJggg==");
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+  }
+
+  /* 版本号：这一屏唯一一行字。12px / 0.16em 字距 / --ink-3，
+     比正文还淡一档 —— 它是这块牌记的落款，不是标题。 */
+  .ab-ver {
+    margin-top: 34px;
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    margin-right: -0.16em;
+    color: var(--ink-3);
+    line-height: 1.6;
+  }
+
+  /* 关于页不留窗框 */
+  body[data-view="about"] .chrome { display: none; }
+
+  /* 首页右下角那枚「关于」。11px、--ink-3、无框无底 ——
+     它是这一屏最轻的东西，轻到不参与「把书拖到这里」那套版面，
+     被指到才浮上来一档。 */
+  #btn-about {
+    position: fixed;
+    right: 28px;
+    bottom: 14px;
+    z-index: 30;
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    padding: 4px 6px;
+    /* 字距在末字后面也加一份，右端看着缩不进去，用负内边距抵掉 */
+    padding-right: calc(6px - 0.16em);
+    line-height: 1;
+    color: var(--ink-3);
+    background: none;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 140ms linear, opacity 200ms linear;
+  }
+
+  #btn-about:hover { color: var(--ink); }
+
+  /* ---------- ② 处理中：一本书正在被处理 ----------
+     这一屏只有一个任务：让人相信还在动。它不承担"到哪儿了" —— 真实的
+     进度条也完全可能卡在 99%，而 99% 并不代表就差一点点（决定7）。
+     所以这里没有百分比、没有阶段名、没有路径。
+
+     两层：背景演"这本书正在被怎么样"，前景是书名与一句祈祷文案。
+     背景有两套，因为两件事真的不一样：
+
+       清洗（导入 / 复核 / 重跑）—— 纸上的字被划掉、碎行被并回去。
+         一行字打出来，一道红线从左往右划过去，然后字与线一起化掉；
+         两截断在逗号上的碎行，缝收拢成一行，再作为一个整体化掉。
+         红线是这一屏唯一的强信号，用真印泥红，划完就跟着走。
+       付梓（打包）—— 一枚枚字模压到纸上，从虚到实、从大到正，各自生灭。
+         印是最后一道工序，不该拿去演清洗。
+
+     两套共用同一套前景、同一套节奏，所以它们是同一只手在干活。
+     前 1.1 秒整屏空白（决定9）：快的时候这一屏根本不该被看见。 */
+
+  #view-busy main {
+    position: relative;
+    align-items: center;
+    justify-content: center;
+    padding: 0 48px;
+  }
+
+  /* 背景层：铺满整窗，不接事件，永远退到前景之后。
+     ★ 碎纸那一套**不压 opacity** —— 压了红线会变成砖红，而这里是"真红线"。
+       字要退后，靠的是字号与 ink-3 的淡，不靠一层灰罩。 */
+  .busy-stage {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* 字模那一套整层压一档：它必须读作"纸背透上来的一层墨"，
+     而不是"屏幕上贴着一堆黑方块"。
+     --blk 是字模的边长，也挂在这一层上 —— 挂在 .busy-ink 上过，那个类
+     从来没有元素带，于是字模宽高是 0，整屏一片空（踩过）。 */
+  .busy-stage.is-ink {
+    opacity: 0.72;
+    /* 它是纸上的字，不是屏上的图，所以比"主角"小一号。 */
+    --blk: clamp(34px, 5.2vmin, 50px);
+  }
+
+  /* ---- 前景：书名 + 一句文案。这一屏的主角是它们。 ---- */
+  .busy-fore {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 1400ms ease;
+  }
+
+  .busy-fore.on { opacity: 1; }
+
+  /* 44px 是量出来的：1013×580 下它是"一屏之主"，又不会把书名顶到贴边。 */
+  .prayer-title {
+    font-family: var(--serif);
+    font-size: 44px;
+    line-height: 1.28;
+    letter-spacing: 0.3em;
+    /* 末尾那一格字距会把整行推得偏右，补回来才是真居中 */
+    margin-right: -0.3em;
+    color: var(--ink);
+    max-width: 62vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .prayer-title[hidden] { display: none; }
+
+  /* 祈祷文案（决定9）：越像"正在校对"越糟 —— 一闪而过时用户会读成
+     "刚校对完"。所以只写跟工序无关、明显不承载信息的话，它的唯一职责
+     是让等待不那么难熬。 */
+  .prayer-line {
+    margin-top: 26px;
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: 0.34em;
+    margin-right: -0.34em;
+    color: var(--ink-2);
+    min-height: 1.6em;
+    opacity: 0;
+    transition: opacity 900ms ease;
+  }
+
+  .prayer-line.on { opacity: 1; }
+
+  @media (max-width: 820px) {
+    .prayer-title { font-size: clamp(30px, 7.4vw, 40px); letter-spacing: 0.24em; margin-right: -0.24em; }
+    .prayer-line { font-size: 14px; margin-top: 22px; }
+  }
+
+  /* ---- 背景之一：字模（付梓） ----
+     一枚字模：整块实墨、字挖空（白文）、边缘带纸纤维的毛茬。
+     毛边用内联 SVG 的 feDisplacementMap 把矩形的四条边推开 —— 零外链。
+     ★ 字在遮罩之外，所以刀口是利的、纸边是毛的，这一对矛盾正是它像真印的原因。 */
+  .bg-slot {
+    position: absolute;
+    width: var(--blk);
+    height: var(--blk);
+    transform: translate(-50%, -50%);
+  }
+
+  .bg-blk {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ink);
+    border-radius: 1px;
+    opacity: 0;
+    will-change: opacity, transform, filter;
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><filter id='br1' x='-20%' y='-20%' width='140%' height='140%'><feTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='4' seed='7'/><feDisplacementMap in='SourceGraphic' in2='n' scale='3.2' xChannelSelector='R' yChannelSelector='G'/></filter><rect x='2' y='2' width='96' height='96' rx='2' fill='%23fff' filter='url(%23br1)'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><filter id='br2' x='-20%' y='-20%' width='140%' height='140%'><feTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='4' seed='7'/><feDisplacementMap in='SourceGraphic' in2='n' scale='3.2' xChannelSelector='R' yChannelSelector='G'/></filter><rect x='2' y='2' width='96' height='96' rx='2' fill='%23fff' filter='url(%23br2)'/></svg>");
+  }
+
+  /* 字：反着写（版上刻的是反字），压印之后才读得正。 */
+  .bg-glyph {
+    font-family: var(--serif);
+    font-size: calc(var(--blk) * 0.78);
+    line-height: 1;
+    font-weight: 700;
+    color: var(--paper);
+    transform: scaleX(-1);
+  }
+
+  /* 浮现：2 秒，从虚到实、从大到正。
+     ★ 这里没有位移。位移会读作"从天上掉下来"，而字模是压上去的。
+     ★ 不透明度在前 16% 就冲到 .55、62% 就到 1：半透明的实墨方块会被
+       读成"没对准的影子"，是这一屏最脏的一种中间态。 */
+  .bg-blk.in {
+    animation:
+      bg-form 2000ms cubic-bezier(0.22, 0.7, 0.24, 1) both,
+      bg-breathe var(--bt, 8100ms) 2000ms ease-in-out infinite;
+  }
+
+  @keyframes bg-form {
+    0%   { opacity: 0;   transform: scale(1.12) rotate(var(--rot, 0deg)); filter: blur(6px); }
+    16%  { opacity: 0.55; transform: scale(1.08) rotate(var(--rot, 0deg)); filter: blur(3.4px); }
+    62%  { opacity: 1;   transform: scale(1.015) rotate(0deg); filter: blur(0.4px); }
+    100% { opacity: 1;   transform: scale(1) rotate(0deg); filter: blur(0); }
+  }
+
+  /* 呼吸感的来源不是"动得快"，是每一枚的周期都不一样（--bt 每枚随机 8–14 秒）。
+     齐步走就成了心跳，读作"要结束了"。
+     ★ 呼吸必须以实墨为基线往下淡 —— 反过来会跳变，看着像闪一下。 */
+  @keyframes bg-breathe {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: 0.72; transform: scale(1.026); }
+  }
+
+  /* 化开：不位移，只在原地慢慢变虚、微微缩下去。
+     消失必须比出现慢得多：出现是"压上去"（一下子），消失是"墨洇进纸里"。 */
+  .bg-blk.out { animation: bg-fade 2400ms cubic-bezier(0.4, 0, 0.6, 0.5) both; }
+
+  @keyframes bg-fade {
+    0%   { opacity: 1;   transform: scale(1); filter: blur(0); }
+    30%  { opacity: 0.86; transform: scale(1); filter: blur(0.5px); }
+    100% { opacity: 0;   transform: scale(0.94); filter: blur(3.4px); }
+  }
+
+  /* ---- 背景之二：碎纸（清洗 / 复核 / 重跑） ----
+     一片碎纸：整块按各自的小角度歪着，像从书页上撕下来摊在桌上。
+     它只做两件事 —— 淡入、淡出；位移交给里面的行（并段时缝隙要收）。 */
+  .bg-pc {
+    position: absolute;
+    transform: translate(-50%, -50%) rotate(var(--rot, 0deg));
+    opacity: 0;
+    --pa: .85;
+    will-change: opacity, filter;
+  }
+
+  .bg-pc.in { animation: bg-pc-in 760ms cubic-bezier(0.2, 0.7, 0.25, 1) both; }
+
+  @keyframes bg-pc-in {
+    0%   { opacity: 0; filter: blur(3.2px); }
+    100% { opacity: var(--pa, .85); filter: blur(0); }
+  }
+
+  /* 化掉：整块一起走，不留在屏上。出现是"打出来"（快、清楚），
+     消失是"洇进纸里"（慢、散开）。
+     ★ 红线先退 —— 字本来就淡，大红条却是全屏最亮的东西。 */
+  .bg-pc.out { animation: bg-pc-out 760ms cubic-bezier(0.4, 0, 0.6, 0.5) both; }
+
+  @keyframes bg-pc-out {
+    0%   { opacity: var(--pa, .85); filter: blur(0); }
+    34%  { opacity: calc(var(--pa, .85) * .72); filter: blur(1.8px); }
+    100% { opacity: 0; filter: blur(4px); }
+  }
+
+  .bg-pc.out .bg-rk { opacity: 0; transition: opacity 300ms ease; }
+
+  /* 一行字 */
+  .bg-line {
+    position: relative;
+    display: block;
+    max-width: min(28vw, 240px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--serif);
+    font-size: 11.5px;
+    line-height: 1.6;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+  }
+
+  .bg-line .ch { opacity: 0; transition: opacity 260ms ease; }
+  .bg-line.on .ch { opacity: 1; }
+
+  /* 红线：2px、真印泥红、从左往右划过去。不压不虚、不淡出 ——
+     划完就跟着整块一起消失。 */
+  .bg-rk {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 2px;
+    margin-top: -0.6px;
+    background: var(--seal);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform 460ms cubic-bezier(0.3, 0.05, 0.15, 1);
+  }
+
+  .bg-line.rule .bg-rk { transform: scaleX(1); }
+
+  /* 两截碎行。合并不是"变淡"，是这条缝收拢成正常行距。 */
+  .bg-merge { display: block; max-width: min(28vw, 240px); }
+
+  /* 深色下碎纸用的是 --ink-3，本该比浅色更亮一点才看得见；但纯在纸上
+     是墨，深色下再亮就成了一行白字。这里单独把它压回去半档，靠 --faint。 */
+  html[data-dark="1"] .bg-line,
+  html[data-dark="1"] .bg-ml { color: var(--faint); }
+
+  .bg-ml {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--serif);
+    font-size: 11.5px;
+    line-height: 1.55;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+  }
+
+  .bg-merge .bg-ml + .bg-ml {
+    margin-top: 1.55em;
+    transition: margin-top 980ms cubic-bezier(0.35, 0, 0.15, 1);
+  }
+
+  .bg-merge.merged .bg-ml + .bg-ml { margin-top: 0.05em; }
+
+  @media (max-width: 820px) {
+    .bg-line, .bg-ml { font-size: 10.5px; }
+    .bg-line, .bg-merge { max-width: min(34vw, 240px); }
+  }
+
+  /* ---- 取消（决定10）：压在右下角，一个词，不带框 ----
+     字号比正文还小 —— 它是退路，不是并列选项。
+     前 1.1 秒不出现：快的时候这一屏根本不该被看见。 */
+  .busy-cancel {
+    position: absolute;
+    right: 26px;
+    bottom: 20px;
+    border: 0;
+    background: none;
+    padding: 6px 4px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    margin-right: -0.14em;
+    color: var(--ink-3);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 900ms ease, color 160ms ease;
+  }
+
+  .busy-cancel.on { opacity: 1; pointer-events: auto; }
+
+  .busy-cancel:hover { color: var(--seal); }
+
+  /* 系统里开了「减少动态效果」就不要演：这一屏的职责是"我还活着"，
+     静止的一行字同样说得清，晃来晃去反而是折磨。 */
+  @media (prefers-reduced-motion: reduce) {
+    .bg-blk, .bg-blk.in, .bg-blk.out { animation: none; opacity: 1; }
+    .bg-pc, .bg-pc.in, .bg-pc.out { animation: none; opacity: 1; }
+    .bg-line .ch { opacity: 1; }
+  }
+
+  /* ---------- ② 结果 / 错误：一栏到底，没有卡片 ---------- */
+
+  .sheet {
+    flex: 1;
+    /* 内容区自己滚、动作条不动 —— 见下面 .scroll / .actions 的注释。
+       这样窗口多矮、页里多几行，主按钮都还在。 */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 24px 28px 14px;
+  }
+
+  .sheet > .col {
+    max-width: 620px;
+    width: 100%;
+    margin: 0 auto;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ⑤ 页（元数据与封面）是三栏：封面 | 书文 | 标签列。比其它页宽得多，
+     不是为了气派，是因为这页在 720×520 下真实溢出过 54px（封面列 320px
+     的画框 + 两行的封面动作，怎么让间距都救不回来）—— 宽度是把高度
+     换成横向空间的唯一办法。 */
+  .sheet.wide > .col { max-width: 1008px; }
+
+  /* 只有这块滚。之前是整页（.sheet）一起滚，于是"多加一行内容"就把主按钮
+     顶出视口 —— ④ 页为此先后被挤出 59px / 30px / 更多，每次都得重算间距。
+     根子是结构：按钮和内容共享同一个滚动条。分开之后加内容不再影响按钮。 */
+  .sheet .scroll {
+    /* flex: 0 1 auto 而不是 1：内容短的时候让动作条紧跟着内容，
+       不要被推到底边、中间留一大片空白（第一版截图就是这样，像没加载完）。
+       flex-shrink 仍然是 1，所以内容长了会自己滚，按钮永远在视口内。 */
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* 负边距 + 正内距：滚动条贴到 .sheet 的 padding 内沿，内容不贴边。 */
+    margin-right: -14px;
+    padding-right: 14px;
+  }
+
+  /* 这一页只回答一个问题：现在能不能直接打包。
+     所以只留三样东西 —— 书名（这是哪本书）、三个数（这本书多大、我动了
+     多少）、"需要人看一眼"（不能直接打包的理由）。
+     原来那七行明细（编码 / 文件大小 / 行数 / 段落 / 平均每章字数 / 改写…）
+     全撤了：没有一条会改变"打不打包"这个决定，却把一屏概览撑成了要滚动的
+     报表（决定12 / 决定18 —— 概览页的长度本身就是判据）。
+
+     版式叫"账本式"：左边一栏账（三个数竖排、点线连着标签），右边一栏陈情
+     （请君端详），中间一道发丝线隔开。整块在标题与动作条之间的剩余空间里
+     垂直居中。为什么是两栏而不是一行三格：告警句长短不齐，铺成一行三格时
+     数字会被句子的宽度牵着走，账就不像账了。
+
+     三条尺寸规矩（三档窗口都不破，见 _shot/resize-check.js）：
+     · 宽度：内容列最宽 880px 居中 —— 行长压在 30–40 字，窗口再宽也不拉长行；
+     · 高度：grid 两行（标题 auto / 内容 1fr），多出来的空间只落在内容区；
+     · 间距：全用固定 px，不用 vh / 百分比 —— 间距不随窗口高度变，拖高不散架。 */
+  #view-result .sheet > .col { max-width: 880px; }
+
+  #view-result .scroll {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    padding-top: 8px;
+  }
+
+  /* 书名：这一页最大的字，也是唯一告诉用户"打开的是哪本"的东西。
+     不显示路径（决定14）—— 路径他刚给过，书名他还没有。
+     26px 而不是 34px：它是页眉不是主角，主角是下面那栏账。 */
+  .r-title {
+    font-size: 26px;
+    line-height: 1.3;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    word-break: break-word;
+    /* 右上角那枚日/月是 fixed 的覆盖层，不占版面：书名第一行能一路写到
+       vw-28，而按钮从 vw-38 起 —— 长书名会钻到按钮底下。留出 22px 让开它。 */
+    padding-right: 22px;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* 账与陈情合成一块内容区，在剩余空间里居中。
+     用 grid 而不是 flex：右边那栏要跨满两行（账 + 回执），flex 做不到跨行。 */
+  #view-result .r-body {
+    grid-row: 2;
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    column-gap: 64px;
+    align-content: center;
+  }
+
+  /* 账本一栏。数字贴右、标签贴左、中间用点线连起来 —— 像目录页的页码，
+     眼睛从标签滑到数字时不会串行。点线只在两者之间那一小段，不拉满整栏。 */
+  #r-figures {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .r-fig {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: center;
+    padding: 13px 0;
+  }
+
+  .r-fig:first-child { padding-top: 0; }
+
+  .r-fig:last-child { padding-bottom: 0; }
+
+  /* 竖排之后不再需要竖线分隔（上一版是三格横排，靠发丝线隔开） */
+  .r-fig + .r-fig {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .r-fig b {
+    display: block;
+    font-size: 29px;
+    font-weight: 400;
+    line-height: 1;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  .r-fig span {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+
+  /* 点线：2px 点、7px 空，比正文的虚线更疏，不抢数字的眼 */
+  .r-fig span::after {
+    content: "";
+    flex: 1;
+    min-width: 6px;
+    margin: 0 11px;
+    height: 2px;
+    background-image: repeating-linear-gradient(to right,
+      var(--ink-3) 0 2px, transparent 2px 9px);
+    opacity: 0.55;
+  }
+
+  /* 重跑回来时的一行交代：只写"你刚才的调整到底生效了没有"。
+     产物路径不写（决定15：不能点、不能选、不能复制，显示给谁看）。 */
+  .r-note {
+    margin-top: 26px;
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 警告：左缘一道印色发丝线，不折叠（铁律 2）。④ 页还在用这套。 */
+  .warnings { margin: 0 0 32px; }
+
+  .warnings .cap {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    letter-spacing: 0.1em;
+    color: var(--seal);
+    margin-bottom: 10px;
+  }
+
+  .warnings ul {
+    margin: 0;
+    padding: 0 0 0 15px;
+    list-style: none;
+    border-left: 2px solid var(--seal-line);
+  }
+
+  .warnings li {
+    font-size: 13.5px;
+    line-height: 1.72;
+    color: var(--ink);
+    padding-bottom: 12px;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .warnings li:last-child { padding-bottom: 0; }
+
+  /* ② 页的告警：标题一句话，下面最多三行（决定31）。同类合并成一句带计数的
+     话 —— 原来第 88、120、156、233 章各占一行"一个段落都没有"，二十行里大半
+     是同一句话换个章号。级别不显示成字，只决定先后（先丢东西的，后难看的）。
+     这套只属于 ② 页（#r-warn-list），④ 页那份照旧走上面那套。
+
+     放在右边一栏，左缘用一道发丝线跟账分开 —— 不是两张卡片，是一页纸的两栏。
+     栏里那份 <ul> 自带左边框（.warnings ul 的 2px 印色线）在这里去掉：
+     栏线已经隔开了，再来一道就成了框套框。 */
+  #r-warnings {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    min-width: 0;
+    padding-left: 34px;
+    border-left: 1px solid var(--rule-soft);
+  }
+
+  #r-warnings .cap {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    margin-bottom: 20px;
+  }
+
+  #r-warn-list {
+    padding-left: 0;
+    border-left: 0;
+    row-gap: 0;
+  }
+
+  #r-warn-list li {
+    font-size: 14.5px;
+    line-height: 1.95;
+    color: var(--ink-2);
+    padding-bottom: 16px;
+    text-wrap: pretty;
+  }
+
+  #r-warn-list li:last-child { padding-bottom: 0; }
+
+  /* 重跑回来的回执行：横跨整块内容区，落在账与陈情下面 */
+  #view-result .r-note {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 24px;
+  }
+
+  /* 窄窗（<820）改成一栏：账在上、陈情在下，中间换成横线。
+     820 这个数不是拍的：账 200 + 间距 64 + 告警最小 320 + 边距 236 ≈ 820。
+     再窄下去右边那栏每行只剩十几个字，一句告警要折三行，就不如叠起来。
+     叠起来之后整块仍在剩余空间里居中（align-content:center 管纵向）。 */
+  @media (max-width: 820px) {
+    #view-result .r-body {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 26px;
+    }
+
+    #r-figures {
+      grid-column: 1;
+      grid-row: 1;
+      max-width: 330px;
+    }
+
+    #r-warnings {
+      grid-column: 1;
+      grid-row: 2;
+      padding-left: 0;
+      border-left: 0;
+      padding-top: 20px;
+      border-top: 1px solid var(--rule-soft);
+    }
+
+    #r-warn-list li {
+      font-size: 14px;
+      line-height: 1.8;
+      padding-bottom: 10px;
+    }
+
+    #view-result .r-note {
+      grid-row: 3;
+      margin-top: 18px;
+    }
+  }
+
+  /* 空书提示：② 页整屏都是数字，「0 字 · 0 章」长得跟正常结果一模一样，
+     用户拖错文件时看到的是一屏"成功"。这一条只在读不出正文时出现，放在
+     账单上面 —— 先说"这本书是空的"，再给数字。 */
+  .blanknote {
+    font-size: 13.5px;
+    line-height: 1.72;
+    color: var(--ink);
+    border-left: 2px solid var(--seal-line-2);
+    background: var(--seal-fill);
+    padding: 12px 15px;
+    margin: 0 0 24px;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* 「只有图」不是异常：书里的字确实是 0，但打包出来是一本正常的画册，
+     没有"需要人看一眼"的东西。朱砂框留给真出事的空书，这里换成灰的。 */
+  .blanknote.calm {
+    border-left-color: var(--rule);
+    background: var(--hover);
+  }
+
+  /* ---- ③ 复核（校定） ----
+     这一屏不是"读"也不是"扫"，是"过一遍"。
+
+     左边一列竖目录，五类事实各占一行：删除 / 合并 / 切章 / 章节树 / 缺字。
+     每类前面一枚 5px 的小灯，浅灰=还没看，浅绿=看过了。绿不是闸（决定21），
+     它只是"我过了这一遍"的记账 —— 五盏都绿，右下角那颗按钮才转成绿底。
+
+     右边是这一类的内容。点开一行才取那一行的上下文（决定24/25）：列表里
+     只给 60 字摘要，正文一次都没进过界面；点哪行，才要哪行。
+     每类先只拿前 40 行，滚到底再要下一段（决定27）。 */
+  :root { --seen: #4A6A3E; }
+  html[data-dark="1"] { --seen: #8CA478; }
+
+  /* 返回键：一枚细箭头，贴在窗口左上角。它不属于版面，所以用 fixed ——
+     它挡不到任何东西，也不会因为页面长短而移位。 */
+  .sk-back {
+    position: fixed; top: 0; left: 0; z-index: 30;
+    margin: 12px 14px; padding: 6px; width: 34px; height: 34px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; color: var(--ink-3); cursor: pointer;
+    border-radius: 3px; transition: color 140ms linear, background-color 140ms linear;
+  }
+  .sk-back:hover { color: var(--ink); background: var(--hover); }
+  .sk-back svg { width: 20px; height: 20px; }
+
+  .sk-sheet { padding: 58px 30px 16px; }
+  .sheet.sk-sheet > .col { max-width: 980px; display: flex; flex-direction: column; min-height: 0; }
+
+  .sk-seen { display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+             background: var(--ink-3); opacity: .45; transition: background-color 200ms linear, opacity 200ms linear; }
+  .sk-seen.on { background: var(--seen); opacity: 1; }
+
+  /* 列表与行 */
+  .sk-list { list-style: none; margin: 0; padding: 0; }
+  .sk-row { display: flex; align-items: center; gap: 12px; padding: 9px 6px 9px 0;
+            border-bottom: 1px solid var(--row-line); font-size: 12.5px; cursor: pointer;
+            transition: background-color 100ms linear; }
+  .sk-row:last-child { border-bottom: none; }
+  .sk-row:hover { background: var(--hover); }
+  .sk-row.sel { background: var(--hover); }
+  .sk-row .ln { flex: 0 0 64px; text-align: right; font-family: var(--sans); font-size: 11.5px;
+                color: var(--ink-3); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+  .sk-row .tx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; color: var(--ink-2); }
+  .sk-row .tag { flex: 0 0 auto; font-size: 10.5px; color: var(--ink-3); letter-spacing: .08em;
+                 padding: 1px 5px; border: 1px solid var(--rule-soft); }
+  .sk-row .keep { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; font-size: 11px;
+                  color: var(--ink-3); opacity: .62; transition: opacity 100ms linear; }
+  .sk-row:hover .keep, .sk-row.kept .keep { opacity: 1; }
+  .sk-row .keep input { margin: 0; appearance: none; -webkit-appearance: none;
+    width: 13px; height: 13px; border: 1px solid var(--rule); border-radius: 2px;
+    background: transparent; position: relative; cursor: pointer; }
+  .sk-row .keep input:checked { background: var(--seal); border-color: var(--seal); }
+  .sk-row .keep input:checked::after { content: ""; position: absolute; left: 3.5px; top: 0.5px;
+    width: 3.5px; height: 6.5px; border-right: 1.5px solid var(--paper);
+    border-bottom: 1.5px solid var(--paper); transform: rotate(40deg); }
+  .sk-row.kept .tx { color: var(--seal); }
+
+  /* 批量条 */
+  .sk-bar { display: flex; align-items: center; gap: 14px; padding: 0 0 12px;
+            font-family: var(--sans); font-size: 11.5px; color: var(--ink-3); letter-spacing: .04em; }
+  .sk-bar .spacer { flex: 1; }
+  .sk-act { background: none; border: none; padding: 3px 0; color: var(--ink-2);
+            font-family: var(--sans); font-size: 11.5px; letter-spacing: .04em; cursor: pointer;
+            border-bottom: 1px solid transparent; }
+  .sk-act:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  /* 大标题：类名 + 数字 + 单位，一行。换类的时候它从上面轻轻落下来，
+     读起来像翻过去一页，而不是刷一下换了内容。 */
+  .sk-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+  .sk-head .nm { font-size: 34px; line-height: 1.12; letter-spacing: .12em; }
+  .sk-head .num { font-size: 34px; line-height: 1.12; font-variant-numeric: tabular-nums;
+                  color: var(--ink-2); font-weight: 400; }
+  .sk-head .unit { font-size: 11.5px; letter-spacing: .16em; color: var(--ink-3);
+                   font-family: var(--sans); }
+  .sk-head.rise { animation: sk-rise 320ms cubic-bezier(.2,.7,.2,1); }
+  @keyframes sk-rise { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .sk-head.rise { animation: none; } }
+
+  .b-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 178px minmax(0,1fr); }
+  .b-dir { border-right: 1px solid var(--rule-soft); padding: 2px 22px 0 0; }
+  .b-dir button { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+                  width: 100%; padding: 11px 8px 11px 14px; background: none; border: none;
+                  border-left: 2px solid transparent; cursor: pointer; text-align: left;
+                  transition: background-color 110ms linear, border-color 110ms linear; }
+  .b-dir button:hover { background: var(--hover); }
+  .b-dir button.on { border-left-color: var(--ink); background: var(--hover); }
+  .b-dir .nm { font-family: var(--serif); font-size: 13.5px; letter-spacing: .12em; color: var(--ink-2);
+               white-space: nowrap; }
+  .b-dir button.on .nm { color: var(--ink); }
+  .b-dir .num { font-family: var(--sans); font-size: 15px; font-variant-numeric: tabular-nums;
+                color: var(--ink-3); }
+  .b-dir button.on .num { color: var(--ink); }
+  .b-dir .sk-seen { align-self: center; margin-right: 2px; flex: 0 0 auto; }
+  .b-dir button > .nm { flex: 1 1 auto; }
+  .b-pane { min-height: 0; display: flex; flex-direction: column; padding-left: 32px; }
+  .b-listwrap { flex: 1; min-height: 0; overflow-y: auto; margin-right: -14px; padding-right: 14px; }
+  .b-inline { padding: 12px 0 18px 76px; border-bottom: 1px solid var(--row-line); }
+
+  /* 左右对照：左原文，右改完的样子。对照本身说明一切，
+     不需要一句"删掉 1 行，前后文不动" —— 对照已经足够。 */
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule);
+         background: var(--paper); }
+  .cmp-col { min-width: 0; padding: 13px 16px 15px; }
+  .cmp-col + .cmp-col { border-left: 1px solid var(--rule-soft); }
+  .cmp-cap { font-family: var(--sans); font-size: 11px; letter-spacing: .18em;
+             color: var(--ink-2); margin-bottom: 12px; }
+  .cmp-body p { margin: 0 0 8px; font-size: 13px; line-height: 1.95; color: var(--ink-2); }
+  .cmp-body p:last-child { margin-bottom: 0; }
+  .cmp-body .gl { display: inline-block; font-family: var(--sans); font-size: 10.5px;
+                  font-variant-numeric: tabular-nums; color: var(--ink-3); opacity: .7;
+                  margin-right: 10px; }
+  .cmp-body p.gone { color: var(--seal); background: var(--seal-fill);
+                     box-shadow: inset 2px 0 0 var(--seal); padding: 3px 9px 3px 12px;
+                     margin-left: -12px; text-decoration: line-through;
+                     text-decoration-color: var(--seal-line); text-decoration-thickness: 1px; }
+  .cmp-body p.gone .gl { color: var(--seal); opacity: .65; }
+  /* 只读类：左边是现场，宽一点；右边是"怎么了"，窄一点 */
+  .cmp.ro { grid-template-columns: 1.45fr 1fr; }
+  .cmp-body p.hot { color: var(--seal); background: var(--seal-fill);
+                    box-shadow: inset 2px 0 0 var(--seal); padding: 3px 9px 3px 12px;
+                    margin-left: -12px; }
+  .cmp-body p.more { color: var(--ink-3); font-family: var(--sans); font-size: 11.5px;
+                     letter-spacing: .04em; }
+  .cmp-prose { font-size: 12.5px; line-height: 1.92; color: var(--ink-2); margin: 0; }
+  .cmp-wait { font-family: var(--sans); font-size: 11.5px; letter-spacing: .06em;
+              color: var(--ink-3); padding: 6px 0; }
+
+  /* 缺字这一类的正文：一句说明，没有列表 —— 粒度按简版走，只报个数。 */
+  .rv-note { font-size: 13px; line-height: 1.95; color: var(--ink-2); max-width: 620px;
+             padding: 4px 0 0; }
+
+  /* 校定：停着是描边（还没定下来），点下去描边收成实底，字往上翻成「装帧」。
+     这不是"再点一次确认"，是转场 —— 翻完自己往下走。 */
+  #btn-accept { padding: 12px 26px; min-width: 116px; }
+  #btn-accept .flip { position: relative; display: block; overflow: hidden;
+                      height: 1.35em; line-height: 1.35em; }
+  #btn-accept .flip > span { display: block; transition: transform 320ms cubic-bezier(.2,.75,.2,1); }
+  #btn-accept .flip .b { position: absolute; left: 0; right: 0; top: 0; transform: translateY(100%); }
+  #btn-accept.go .flip .a { transform: translateY(-100%); }
+  #btn-accept.go .flip .b { transform: translateY(0); }
+  #btn-accept.go { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); }
+  /* 五盏灯全绿：绿底（印泥色）。绿不是闸 —— 它只说明"五类都过了眼"。 */
+  #btn-accept.ready { background: var(--seen); border-color: var(--seen); color: var(--paper); }
+  @media (prefers-reduced-motion: reduce) { #btn-accept .flip > span { transition: none; } }
+
+  @media (max-width: 820px) {
+    .b-body { grid-template-columns: 132px minmax(0,1fr); }
+    .b-pane { padding-left: 18px; }
+    .sk-head .nm, .sk-head .num { font-size: 29px; }
+    .sk-head { margin-bottom: 12px; }
+    .b-inline { padding: 10px 0 14px 0; }
+    .cmp-col { padding: 10px 12px 12px; }
+    .cmp-cap { margin-bottom: 9px; }
+    .cmp-body p { font-size: 12.5px; line-height: 1.85; margin-bottom: 6px; }
+  }
+
+  /* 主按钮：墨色实底。**不用印色** —— 印色在这套界面里只有一个含义：
+     需要人看一眼（警告）。把它同时当作"主色按钮"，会让人每次点主按钮
+     都像在确认一个错误。 */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-top: 1px solid var(--rule-soft);
+    margin-top: 18px;
+    padding: 14px 0 0;
+    /* 这里试过 `position: sticky; bottom: 0` 想让动作条永远在窗口底边，
+       实测**不行**：sticky 是相对滚动祖先定位，而 .actions 是 .col 的最后
+       一个子元素，它的包含块到头了，结果它照旧停在自然位置，下面已经滚上来的
+       复选框文字从按钮底下露出来（截图可见）。真正可靠的做法只有两条：
+       要么把动作条挪出滚动区（结构改动，四个视图都要动），要么把内容压到
+       一屏内（下面这些间距就是这么定下来的）。选了后者。 */
+  }
+
+  button {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    letter-spacing: 0.04em;
+    border-radius: 0;
+    cursor: pointer;
+    transition: background-color 100ms linear, color 100ms linear, border-color 100ms linear;
+  }
+
+  .primary {
+    padding: 12px 30px;
+    background: var(--primary-bg);
+    color: var(--primary-fg);
+    border: 1px solid var(--primary-bg);
+  }
+
+  .primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+  .primary:disabled { background: var(--ink-3); border-color: var(--ink-3); cursor: default; }
+
+  .ghost {
+    padding: 12px 22px;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--rule);
+  }
+
+  .ghost:hover { border-color: var(--ink-2); }
+
+  .quiet {
+    padding: 12px 2px;
+    background: none;
+    border: none;
+    color: var(--ink-2);
+    border-bottom: 1px solid transparent;
+  }
+
+  .quiet:hover { color: var(--ink); border-color: var(--ink-2); }
+
+  .spacer { flex: 1; }
+
+  /* ---------- ④ 元数据与封面 ----------
+     这一页是"书的版权页"，不是设置面板。所以：
+     · 书名是整页最大的字，点进去就能改（不是表单里的一行小字）；
+     · 封面在左、文字在右 —— 眼睛先看到书，再看到参数；
+     · 作者与语言同排一行，它们同级且次要；
+     · 字体 / AZW3 / 输出目录收进「更多选项」，默认展开的是"这本书是什么"。
+     旧版是六条全宽横带（标签+输入框+说明）逐条往下堆，读起来像注册表单 ——
+     信息一条不少，但每一行都在抢同样的注意力。 */
+  /* 两栏：封面 | 书文。左栏宽度**不写死** —— 封面大小跟着窗口高度走
+     （见 .cover-stage），写死 272px 就会出现"高度装不下、宽度还占着"，
+     720×520 下正是这样溢出 54px 的。 */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0 44px;
+    align-items: stretch;
+    padding-top: 2px;
+  }
+
+  /* 左栏只负责"站在那儿"，高度由右栏决定（grid 拉伸）。
+     封面自己不去推高左栏 —— 它用百分比高度，在内在尺寸计算里等于 0，
+     于是行高只由右栏的文字与小样说了算。这条链上不能有"子撑父、
+     父又定子"的环，一环就翻车（试过 flex:1，画框变 258×388 不成比例）。 */
+  .meta-cover { display: flex; flex-direction: column; min-height: 0; }
+
+  /* 画框：高度对左栏负责，宽度由 3:4 反推 ——
+     左栏由 grid 拉伸成与右栏等高，所以"画的底边"永远和"小样带的底边"
+     是一条线（这一页最要紧的一条横线）。
+     只给高度、不给宽度：两个尺寸都定住时 aspect-ratio 就作废了。
+     试过让它 flex:1 去撑左栏 —— 左栏高度本来是它定的，一撑就成环，
+     实测画框变成 258×388（不成 3:4），画面被塞进白边里。 */
+  .cover-stage {
+    position: relative;
+    height: 100%;
+    width: auto;
+    align-self: flex-start;
+    aspect-ratio: 3 / 4;
+    /* 这里**不能**写 max-height / max-width。写过 506×380 那一版：
+       右栏自然高 516，画却被 380 宽反推成 506.67 高，于是画框底边比
+       右栏底边高 10px —— 这一页最要紧的那条横线就这么断了
+       （1040×760 / 1600×900 / 1400×1000 全部差 10）。
+       画宽本来就是 0.75 × 右栏高，右栏最宽时字列仍有 520 以上，不缺字宽。 */
+  }
+
+  .cover-frame {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .cover-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+  /* 版式名压在画面下沿：它是"这一张是谁"的答案，该贴着画，
+     而不是在画下面另起一行自报家门。 */
+  .cover-cap {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 7px 10px 6px;
+    font-family: var(--sans); font-size: 11.5px; letter-spacing: .04em;
+    color: #F1EFE8;
+    background: linear-gradient(to top, rgba(14, 15, 17, 0.74), rgba(14, 15, 17, 0));
+    pointer-events: none;
+  }
+  .cover-cap[hidden] { display: none; }
+
+  .cover-frame .empty {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.08em;
+    text-align: center;
+    line-height: 1.7;
+    white-space: pre-line;
+  }
+
+  /* 封面下的四个动作。上一版是 12px / padding 7×11 —— 那是"词"的规格，
+     跟主按钮「付梓」差着三倍体量，而挑封面正是这一页的正事。
+     现在它们是按钮：40 高、13.5px（跟全站 button 同档），比「付梓」矮半档，
+     层级是"这是正事" < "这是最后一步"。
+     它们跟右栏底边对齐，靠的不是自己的 auto margin（那会跟"更多选项"抢同一截
+     空白，把空白劈成两半），而是上面的 .more 吃掉了全部余量 ——
+     于是"更多选项 + 封面动作"这一组整体沉到底，四个动作的下沿仍然与封面下沿
+     落在同一条横线上。 */
+  .cover-tools {
+    margin-top: 26px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cover-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .cover-actions button {
+    flex: 0 1 auto;
+    min-height: 40px;
+    padding: 10px;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    letter-spacing: 0.04em;
+  }
+
+  .cover-actions button:hover { color: var(--ink); border-color: var(--ink-2); }
+  /* 当前那一款：墨底反白，跟"这一张就是它"同一口气。 */
+  .cover-actions button.on {
+    background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg);
+  }
+
+  .cover-actions .pick-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  #cover-note {
+    margin-left: auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--sans); font-size: 11px; letter-spacing: .03em;
+    color: var(--ink-3);
+    text-align: right;
+  }
+  #cover-note[hidden] { display: none; }
+
+  /* 右栏是 flex 列：文字在上、样张带贴底吃掉剩余高度。
+     这样两栏永远等高 —— 窗口变高时多出来的高度落在"大封面"和
+     "样张带"上，而不是在右栏底下摊成一片白。 */
+  .meta-main { min-width: 0; display: flex; flex-direction: column; }
+
+  .title-label,
+  .pair-item label,
+  .outdir-row label {
+    display: block;
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-3);
+    margin-bottom: 4px;
+  }
+
+  /* 书名：没有输入框，只有一条线。它决定成品文件名，所以它是这一页的主角。
+     36px 是量出来的：30px 时它跟下面「作者 / 语言」只差 16px，读起来是一组输入框；
+     36px 才压得住场面，又不会把右栏撑高到和封面对不上。 */
+  .title-input {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--rule-soft);
+    background: transparent;
+    padding: 2px 0 10px;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 36px;
+    line-height: 1.25;
+    letter-spacing: 0.01em;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .title-input:focus { outline: none; border-bottom-color: var(--ink); }
+
+  .pair {
+    display: flex;
+    gap: 26px;
+    margin-top: 40px;
+  }
+
+  .pair-item { flex: 1 1 auto; min-width: 0; }
+  .pair-item.narrow { flex: 0 0 132px; }
+
+  .pair-item input {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid var(--rule-soft);
+    background: transparent;
+    padding: 3px 0 7px;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .pair-item input:focus { outline: none; border-bottom-color: var(--ink); }
+  .pair-item input::placeholder { color: var(--ink-3); }
+
+  /* 一行字据：不加发丝线、不拉大间距 —— 它只是"打包的是这份"，
+     不是又一个区块。（原来它上面那道线 + 40px 间距，是给一屏装不下
+     找的借口。） */
+  /* ④ 页的返回键：跟 ③ 复核页同款的那枚 .sk-back，贴在窗口左上。
+     两处偏移是量出来的，不是估的：
+     · 页码条右让 34px —— 正好是箭头那块命中区，也是 ③ 里箭头到正文的
+       那段空隙。箭头留在页边，字从版心起头，两者互不挤。
+     · 箭头再往下 4px（12 → 16）—— 它旁边是 11px 的页码，墨迹中心比箭头
+       低 4.5px。不挪的话，箭头单独看没问题，跟小字并排就浮在半空。
+     这两条都不改版面高度，所以 720×520 那点零余量不会被吃掉。 */
+  #view-meta .sk-back { margin-top: 16px; }
+  #view-meta .pagetop { padding-left: 34px; }
+
+  /* ⑤ 页的 .scroll 是唯一一页需要"长大"的：这一页的主体是一张画，
+     画本来就该跟窗口一起长。别的页内容是字，字不会因为窗口变高而变大，
+     所以那边保持 flex:0 1 auto（内容短时动作条紧跟内容，别推到底边）。 */
+  #view-meta .scroll {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 生长与收缩两条规则，缺一不可：
+     · grow = 1：这一页的主体是一张画，画该跟窗口一起长。右栏的按钮被
+       margin-top:auto 顶到底边，中间多出来的高度全给左栏那张画 ——
+       窗口变高时"字和按钮不动、画变大"，而不是右栏底下摊一片白。
+     · shrink = 0：写成可缩时，展开「更多选项」右栏变高、栅格被压到 420，
+       可里面那张画还按 496 排 —— 画的下半截伸到可视区外面去了
+       （1013×580 探针实测画框底 565、栅格底 487）。压扁不等于裁切：
+       溢出的部分谁也拿不到。不许缩，让 .scroll 滚，展开态才摸得到底。 */
+  #view-meta .meta-grid {
+    flex: 1 0 auto;
+    min-height: 0;
+    /* 画能长，但有尽头：450 高 = 336 宽。
+       这个上限不是"够不够大"的问题，是"这一页的主语是谁"的问题 ——
+       540 的时候画占了左半屏整整 538 高，书名被衬成一行小字，
+       这一页读起来像"封面下载页"；压到 450，画仍然是这一页最大的一块，
+       但书名和它站在同一量级，两个都是主角。
+       450 也是量出来的：压到这里，右栏「书名 / 作者 / 语言 / 一行数据」
+       与「更多选项 + 三个封面动作」之间的空隙约 110px，
+       刚好是一道换气，不是漏了一块（540 时那截是 215px，太大了）。
+       多出来的高度由上下两条 auto margin 均分，
+       所以窗口极高时是"四周留白"，不是"底下摊一片白"（那才是原来那个病）。 */
+    max-height: 450px;
+    margin-top: auto;
+    margin-bottom: auto;
+  }
+
+  .meta-facts {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-3);
+    letter-spacing: 0.03em;
+    margin-top: 32px;
+  }
+
+  /* 更多选项：默认收起。summary 里带着当前输出目录，
+     所以"收起来"不等于"藏起来" —— 一眼能看出成品会落在哪。
+
+     那一大截 auto margin 是这页排版的关键。右栏的内容只有两百来高，
+     而它要陪左边四百高的封面站到底，中间必然要空出一截 —— 空在哪决定了
+     它读作什么：夹在书名的输入框和作者的输入框之间，读起来像漏了一块；
+     放在"这本书是谁"和"我要对它做什么"之间，读起来是换气。
+     上面那条发丝线就是这条分界，它同时也是展开态的边界（展开后 auto
+     margin 归零，线仍把「操作区」和「信息区」隔开）。
+
+     ★ 别再往右栏里塞东西去填这截白。填了就变成"这一页很满"，
+       而这一页要的恰恰是"就这些东西"。 */
+  .more {
+    margin-top: auto;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  .more > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-2);
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    list-style: none;
+    padding: 8px 0 4px;
+  }
+
+  .more > summary::-webkit-details-marker { display: none; }
+  .more > summary::before {
+    content: "＋";
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--ink-3);
+    width: 11px;
+    flex: 0 0 auto;
+  }
+  .more[open] > summary::before { content: "－"; }
+  .more > summary:hover { color: var(--ink); }
+
+  /* 标签不许换行（第一版被压成"更多选/项"），能被压缩的只有右边那截路径。 */
+  .more > summary > span:first-child {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .more-note {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 收起时这一行是唯一能看见的"当前值"（输出到哪儿），展开后下面那行
+     把同一件事说全了 —— 留着就是同一句话并排两遍。 */
+  .more[open] .more-note { display: none; }
+
+  .more-body { padding: 6px 0 2px 21px; }
+
+  /* 两个复选框：默认值是"嵌字体、不转 AZW3"，说明只在需要时读，
+     所以字小、灰、贴着复选框，不占独立行。 */
+  .check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 9px;
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.65;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+  }
+
+  .check-row input { margin-top: 2px; accent-color: var(--ink); }
+
+  .outdir-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .outdir-row label { flex: 0 0 auto; margin-bottom: 0; }
+
+  .outdir-row input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    border-bottom: 1px solid var(--rule-soft);
+    background: transparent;
+    padding: 3px 0 6px;
+    color: var(--ink-2);
+    font-family: var(--sans);
+    font-size: 11.5px;
+    letter-spacing: 0.02em;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .outdir-row input[type="text"]:focus { outline: none; border-bottom-color: var(--ink); }
+
+  .outdir-row .quiet {
+    flex: 0 0 auto;
+    font-family: var(--sans);
+    font-size: 11.5px;
+    padding: 0 0 3px;
+    border: none;
+    background: none;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+
+  .outdir-row .quiet:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+  /* ---------- ⑤ 完成 ----------
+
+     这一页的形状是"一本书摆在你面前"：左边是它，右边是它叫什么、谁写的、
+     哪里可能不对。跟 ④ 页同一个骨架（画在左、字在右），因为这两页说的是
+     同一件事的两头 —— ④ 是"它将要长成这样"，⑤ 是"它已经长成这样了"。
+
+     上一版没有画：一屏灰字加两个按钮，读起来像一张发票。用户拿到的是一个
+     文件，可这个文件是他等了十分钟换来的、有封面有书名的一本书，界面上却
+     一点"书"的样子都不给。封面这次是真打进包里的那一张（payload.cover），
+     不是又一版预览。 */
+
+  /* 这一页内容天然矮（一本封面加三行字）。顶对齐会在底下剩两百多像素，
+     整页读作"上面挤了一坨、下面是空的"。④ 页的做法是把栅格上下 auto 均分，
+     但那一页的父级（.scroll）被内容撑满了；这一页的 .scroll 是 flex:0 1 auto，
+     没有余量可分，所以要让滚动区自己变成纵向居中容器。 */
+  #view-done .scroll {
+    display: flex;
+    flex-direction: column;
+    /* 让滚动区吃满余量，居中交给栅格自己的 margin:auto 0 —— 不用
+       justify-content:center，那会把「05 完成」也一起挪到半空，
+       而那一行是"这是第几步"，不是这一页的内容。 */
+    flex: 1 1 auto;
+  }
+
+  .done-grid {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: clamp(28px, 4.2vw, 52px);
+    /* 右栏只有三行字，封面却有 440 高。顶对齐时右栏那三行悬在封面顶上，
+       底下空一截像漏了什么；居中对齐让"书名"落在封面竖轴的中点附近，
+       与 ④ 页书名压着封面顶部那条线不同 —— 那页右栏满，这页不满。 */
+    align-items: center;
+    /* 上下 auto 均分：页码留在顶上，栅格落在余下空间的中间。
+       （这一页内容天然比视口矮。不加这句，1040×760 底下会剩 280px 白，
+       整页读作"上面挤了一坨、下面是空的"。） */
+    margin: auto 0;
+  }
+
+  /* 画框高度，宽度由 3:4 反推。上限 420 是因为再高就是在展览封面；
+     下限 200 是 720×520 里还认得出封面上写了什么。 */
+  .done-stage {
+    position: relative;
+    height: clamp(200px, 54vh, 440px);
+    aspect-ratio: 3 / 4;
+  }
+
+  .done-frame {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .done-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+  .done-frame .empty {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.08em;
+    text-align: center;
+    line-height: 1.7;
+    white-space: pre-line;
+  }
+
+  .done-main { min-width: 0; display: flex; flex-direction: column; }
+
+  /* 与 ④ 页的书名同档：那页是"确认它叫什么"，这页是"它就叫这个"。 */
+  .done-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    line-height: 1.25;
+    letter-spacing: 0.02em;
+    font-weight: 400;
+    margin: 0;
+    word-break: break-word;
+  }
+
+  /* 作者、篇幅、另存 —— 都带标签。上一版是"甘草 · 893 章 · 203,826 段"
+     一行三节，读起来像一行小字报；而且段数是 ③ 页已经删掉的指标，
+     跑到最后一页又冒出来一次。 */
+  .done-kv {
+    display: grid;
+    grid-template-columns: 60px minmax(0, 1fr);
+    gap: 4px 14px;
+    align-items: baseline;
+    margin-top: 14px;
+  }
+
+  .done-kv:first-of-type { margin-top: 26px; }
+
+  .done-kv[hidden] { display: none; }
+
+  .done-kv dt {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-3);
+  }
+
+  .done-kv dd {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink);
+    line-height: 1.6;
+    word-break: break-word;
+  }
+
+  .done-kv dd.muted { color: var(--ink-3); }
+
+  /* 告警（决定31/32）：同类合并成一句带计数的短话，按"丢了 / 会跳错 / 只是难看"
+     三级排。级别不写成"数据丢失级"这种词 —— 左边那根竖线就是级别：
+     印色是内容真缺了，墨色是结构错了，浅灰是书照读不误。
+     没有要说的就整块不出现。 */
+  .done-alerts {
+    margin-top: 30px;
+    border-top: 1px solid var(--rule-soft);
+    padding-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .done-alert {
+    display: grid;
+    grid-template-columns: 2px minmax(0, 1fr);
+    gap: 14px;
+    align-items: stretch;
+  }
+
+  .done-alert::before { content: ""; display: block; background: var(--ink-3); }
+  .done-alert[data-lv="loss"]::before { background: var(--seal); }
+  .done-alert[data-lv="order"]::before { background: var(--ink-2); }
+
+  .done-alert p {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: var(--ink-2);
+    word-break: break-word;
+  }
+
+  .done-alert[data-lv="loss"] p { color: var(--ink); }
+
+  /* [hidden] 的 display:none 敌不过上面那条 display:flex ——
+     干净的书会因此多出一条横线和 20px 空白，看着像"这里本该有话被吞了"。 */
+  .done-alerts[hidden] { display: none; }
+
+  /* 出口：两个真按钮一行，后门是"打开这本书"底下那行虚线的字。
+     虚线不是装饰 —— 它说"这是一条小路"，跟实底/描边的两级按钮区分开。 */
+  .done-exit { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
+  .done-exit-row { display: flex; align-items: center; gap: 16px; }
+  .dashed {
+    border: none;
+    background: none;
+    padding: 0 0 2px;
+    font-size: 12px;
+    letter-spacing: .06em;
+    color: var(--ink-3);
+    border-bottom: 1px dashed var(--rule);
+  }
+  .dashed:hover { color: var(--ink); border-bottom-color: var(--ink-2); }
+
+  /* 矮窗口（720×520 与 1013×580）下，这一页的告警要挤进一屏。
+     规格要求不滚动，装不下就得让位 —— 让的是间距，不是内容。
+     省出来的三处：告警区的上下留白、动作条的上边距、两个出口按钮之间的缝。 */
+  @media (max-height: 600px) {
+    .done-alerts { margin-top: 20px; padding-top: 14px; gap: 10px; }
+    #view-done .actions { margin-top: 12px; padding-top: 10px; }
+    .done-exit { gap: 6px; }
+  }
+
+  /* ---------- 错误视图 ----------
+     这一页以前是「620 宽的窄栏居中吊在半空、右下角一颗『换一个文件』」。
+     三个毛病：①右边空 400px，读起来像一张没填完的表；②它没有页码条，
+     跟其余五页的顶边全错开；③不管出什么事都只有「换一个文件」一个出口 ——
+     可实际情况是：④ 页打包失败，用户想的是「我回去改改再付梓」；
+     ⑤ 页打不开阅读器，用户想的是「书就在那儿，帮我打开目录」；
+     「换一个文件」在这两种时候等于把刚做好的东西扔了。
+     现在它跟其余页同构：顶边一条页码（知道自己是第几步被打断的）、
+     正文左边一道朱红竖线（跟完成页告警是同一套语言：红竖线 = 这里有问题）、
+     出口在右下角，按上下文给一到两颗。 */
+  .err-head {
+    display: grid;
+    grid-template-columns: 2px minmax(0, 1fr);
+    gap: 18px;
+    align-items: stretch;
+  }
+
+  .err-head::before {
+    content: "";
+    display: block;
+    background: var(--seal);
+  }
+
+  .err-head-in { min-width: 0; }
+
+  .err-title {
+    font-size: 26px;
+    line-height: 1.3;
+    margin: 0 0 10px;
+    font-weight: 400;
+    word-break: break-word;
+  }
+
+  .err-body {
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.8;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+    -webkit-user-select: text;
+    user-select: text;
+    margin: 0;
+  }
+
+  /* 技术细节：类名和异常原文不进正文，收在这个折角里。
+     默认关着 —— 出事的时候人要看的是「怎么办」，不是「哪一行」。 */
+  .err-more { margin-top: 24px; }
+  .err-more[hidden] { display: none; }
+
+  .err-more > summary {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    color: var(--ink-3);
+    cursor: pointer;
+    list-style: none;
+    display: inline-block;
+  }
+
+  .err-more > summary::-webkit-details-marker { display: none; }
+  .err-more > summary::before { content: "＋ "; }
+  .err-more[open] > summary::before { content: "－ "; }
+  .err-more > summary:hover { color: var(--ink-2); }
+
+  .err-more pre {
+    margin: 12px 0 0;
+    padding: 12px 14px;
+    background: var(--paper-2);
+    font-family: ui-monospace, Consolas, "Courier New", monospace;
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    -webkit-user-select: text;
+    user-select: text;
+    max-height: 168px;
+    overflow: auto;
+  }
+
+  /* 出口钉在底边，跟其余五页一样。
+     ★ 这一行不能省：`.sheet .scroll` 默认是 flex:0 1 auto（只占内容高），
+     错误页的内容通常只有两三行，于是 .actions 会跟着内容浮在页面上半截，
+     下面是七百像素的白 —— 同一个按钮，在别的页在右下角，在这一页在半空。
+     让滚动区吃掉余下的高度，出口就自然沉到底了。 */
+  #view-error .scroll { flex: 1 1 auto; display: flex; flex-direction: column; }
+
+  /* 内容居栏宽的一半：两侧各留一道等宽的边，读起来是「一张便条」而不是
+     「一张没填完的表」。620 是这句话的读宽上限 —— 再宽，一行要横跨整个窗口，
+     人眼回行会丢行。 */
+  #view-error .err-main { align-self: center; max-width: 620px; width: 100%; }
+
+  /* 页码条跟着内容一起居中。它读的是「我在第几步被打断」，
+     跟下面这句「出了什么事」是同一块东西的两行 —— 一个钉在最左、
+     一个浮在中间，中间那道横跨两百像素的空档会把它们拆成两件事。 */
+  #view-error .pagetop { align-self: center; max-width: 620px; width: 100%; }
+
+  /* 一句话 + 一颗按钮，中间空七百像素 —— 那不是留白，那是没排完。
+     把标题块放在滚动区的垂直中线上：上面是页码（我在第几步被打断），
+     下面是出口（接下来怎么办），中间这句是「出了什么事」。三段各归其位。
+     ★ 用 auto margin 而不是 justify-content:center —— 后者在内容超高时
+     会把顶上一截顶出可视区、还滚不回去；auto margin 在没余量时归零，
+     自然退化成顶对齐。 */
+  .err-main { margin: auto 0; }
+
+  /* 出口：跟完成页同一个骨架（主按钮在上、虚线小字在下，都靠右）。
+     原本还套了一层 .err-exit-row 放「换一个文件 + 再试一次」并排 ——
+     可「再试一次」从来没有一处调用点给过 again，那颗按钮永远 hidden，
+     于是 row 里恒剩一颗，「并排」这个结构没有任何时候成立过。撤掉。 */
+  .err-exit { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
+
+  @media (max-height: 600px) {
+    .err-title { font-size: 22px; }
+    .err-body { font-size: 13.5px; line-height: 1.7; }
+    .err-more { margin-top: 18px; }
+    .err-more pre { max-height: 120px; }
+    #view-error .actions { margin-top: 12px; padding-top: 10px; }
+    .err-exit { gap: 6px; }
+  }
+
+  /* 滚动条压细，别在纸上出现一根粗条 */
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--thumb); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--thumb-hover); }
+</style>
+</head>
+<body data-view="drop">
+
+<div class="chrome">
+  <button class="theme-btn" id="btn-theme" type="button" aria-label="主题">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+         stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+      <path d="M8 1.6v1.5M8 12.9v1.5M1.6 8h1.5M12.9 8h1.5M3.5 3.5l1 1M11.5 11.5l1 1M12.5 3.5l-1 1M4.5 11.5l-1 1"/>
+      <circle cx="8" cy="8" r="2.9"/>
+    </svg>
+  </button>
+</div>
+
+<!-- ① 导入 -->
+<div class="view" id="view-drop">
+  <main>
+    <div id="drop-area">
+      <!-- 墨团：一个跟手走的墨晕 + 一圈荡开的环。都在 .marks 下面、正文上面。 -->
+      <div class="bloom" aria-hidden="true"></div>
+      <div class="ripple" aria-hidden="true"></div>
+      <div class="marks"><i></i><i></i><i></i><i></i></div>
+      <div class="drop-title">
+        <span class="t-idle">把书拖到这里</span>
+        <span class="t-book">书稿已得</span>
+        <span class="t-other">非书也</span>
+      </div>
+    </div>
+  </main>
+  <!-- 关于。★ 必须放在 #drop-area 外面：那个框自己接 click 去弹文件选择框，
+       放在里面点一下会同时触发两件事。 -->
+  <button id="btn-about" type="button">关于</button>
+</div>
+
+<!-- ② 处理中 -->
+<div class="view" id="view-busy">
+  <main>
+    <div class="busy-stage" id="busy-stage" aria-hidden="true"></div>
+    <div class="busy-fore" id="busy-fore">
+      <div class="prayer-title" id="busy-name" hidden></div>
+      <div class="prayer-line" id="busy-line"></div>
+    </div>
+    <button class="busy-cancel" id="btn-cancel" type="button">取消</button>
+  </main>
+</div>
+
+<!-- ② 结果 -->
+<div class="view" id="view-result">
+  <main>
+    <div class="sheet">
+      <div class="col">
+        <div class="scroll">
+          <div class="r-title" id="r-title"></div>
+          <div class="blanknote" id="r-empty" hidden></div>
+          <div class="r-body">
+            <div class="r-figs" id="r-figures"></div>
+            <div class="r-note" id="r-note" hidden></div>
+            <!-- 值得看一眼的东西：标题一句话，下面最多三行（决定31）。
+                 同类合并成一句带计数的话，重复的章号不再各占一行。 -->
+            <div class="warnings" id="r-warnings" hidden>
+              <div class="cap">请君端详</div>
+              <ul id="r-warn-list"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <!-- 三颗按钮就是这一页的全部出口（决定16）：往下走（打包）、
+               回头核对（复核）、不要了（取消）。原来的"看报告"和"打开产物
+               目录"删了 —— 前者是给人看的报告本身就不该生成（决定17），
+               后者不能点不能选不能复制，是这一屏唯一的"东西在哪"。 -->
+          <button class="quiet" id="btn-discard">取消</button>
+          <div class="spacer"></div>
+          <button class="ghost" id="btn-review" disabled>复核</button>
+          <button class="primary" id="btn-epub" disabled>装帧</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ③ 复核（校定）：五类事实一列竖目录，点开一行才取上下文 -->
+<div class="view" id="view-review">
+  <button class="sk-back" id="btn-review-back" type="button" aria-label="回上一页">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+         stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9.5 3.5L5 8l4.5 4.5"/>
+    </svg>
+  </button>
+  <main>
+    <div class="sheet sk-sheet">
+      <div class="col sk-col">
+        <div class="b-body">
+          <nav class="b-dir" id="b-dir"></nav>
+          <div class="b-pane">
+            <div id="b-head"></div>
+            <div class="sk-bar" id="b-bar"></div>
+            <div class="b-listwrap"><ul class="sk-list" id="b-list"></ul></div>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="spacer"></div>
+          <button class="ghost" id="btn-accept" type="button">
+            <span class="flip"><span class="a">校定</span><span class="b" aria-hidden="true">装帧</span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ④ 元数据与封面 -->
+<div class="view" id="view-meta">
+  <!-- 返回键跟 ③ 复核页同款：贴窗口左上的细箭头，不占版面。页码条
+       因此右让 34px，读起来是「← 04 确认书名与封面」，箭头在页边、
+       字在版心，各归各位。 -->
+  <button class="sk-back" id="btn-meta-back" type="button" aria-label="回上一步">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+         stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9.5 3.5L5 8l4.5 4.5"/>
+    </svg>
+  </button>
+  <main>
+    <div class="sheet wide">
+      <div class="col">
+        <div class="scroll">
+          <div class="pagetop">
+            <span class="pgno">04</span><span class="pgname">确认书名与封面</span>
+          </div>
+
+          <div class="meta-grid">
+            <div class="meta-cover">
+              <div class="cover-stage">
+                <div class="cover-frame" id="cover-frame">
+                  <div class="empty">无封面
+阅读器会显示书名</div>
+                </div>
+                <div class="cover-cap" id="cover-cap" hidden>
+                  <span id="cover-cap-name"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="meta-main">
+              <label class="title-label" for="m-title">书名</label>
+              <input class="title-input" type="text" id="m-title"
+                     spellcheck="false" autocomplete="off">
+
+              <div class="pair">
+                <div class="pair-item">
+                  <label for="m-author">作者</label>
+                  <input type="text" id="m-author" spellcheck="false"
+                         autocomplete="off" placeholder="留空则不写作者">
+                </div>
+                <div class="pair-item narrow">
+                  <label for="m-lang">语言</label>
+                  <input type="text" id="m-lang" spellcheck="false" autocomplete="off">
+                </div>
+              </div>
+
+              <div class="meta-facts" id="m-facts"></div>
+
+              <details class="more" id="more-options">
+                <summary>
+                  <span>更多选项</span>
+                  <span class="more-note" id="more-note"></span>
+                </summary>
+                <div class="more-body">
+                  <label class="check-row">
+                    <input type="checkbox" id="m-fonts" checked>
+                    <span title="正文思源宋、标题思源黑；关掉后正文用阅读器自己的字体">内嵌字体（约 2 MB，关掉包更小）</span>
+                  </label>
+                  <label class="check-row">
+                    <input type="checkbox" id="m-azw3">
+                    <span id="m-azw3-label">同时导出 AZW3（Kindle 用）</span>
+                  </label>
+                  <div class="outdir-row">
+                    <label for="m-outdir">输出到</label>
+                    <input type="text" id="m-outdir" spellcheck="false" autocomplete="off">
+                    <button class="quiet" id="btn-outdir" type="button">选目录</button>
+                  </div>
+                </div>
+              </details>
+
+              <div class="cover-tools">
+                <div class="cover-actions">
+                  <button id="btn-cover-auto" type="button">自动生成</button>
+                  <button id="btn-cover-pick" type="button"><span class="pick-name">打开图片</span></button>
+                  <button id="btn-cover-none" type="button">不要封面</button>
+                  <button id="btn-cover-source" type="button" hidden>用原书封面</button>
+                  <span id="cover-note"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <!-- 出口在右下角，跟 ③ 复核、② 结果同一侧 —— 主按钮永远落在同一
+               个位置，人才不用每屏重新找它。
+               这一屏没有次要动作了：往回走是左上角那枚箭头的事，不是按钮
+               的事。硬留一颗「回上一步」在这里，等于把同一个出口说两遍。 -->
+          <div class="spacer"></div>
+          <button class="primary" id="btn-build">付梓</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ⑤ 完成 -->
+<div class="view" id="view-done">
+  <main>
+    <div class="sheet wide">
+      <div class="col">
+        <div class="scroll">
+          <div class="pagetop">
+            <span class="pgno">05</span><span class="pgname">完成</span>
+          </div>
+
+          <div class="done-grid">
+            <div class="done-stage">
+              <div class="done-frame" id="d-frame">
+                <div class="empty">没有封面</div>
+              </div>
+            </div>
+
+            <div class="done-main">
+              <h1 class="done-title" id="d-title"></h1>
+
+              <dl class="done-kv">
+                <dt>作者</dt>
+                <dd id="d-author"></dd>
+              </dl>
+              <dl class="done-kv">
+                <dt>篇幅</dt>
+                <dd id="d-length"></dd>
+              </dl>
+              <dl class="done-kv" id="d-azw3-row" hidden>
+                <dt>另存</dt>
+                <dd id="d-azw3"></dd>
+              </dl>
+
+              <!-- 打包期才知道的毛病（决定30/31/32）：此刻改不了，
+                   但"这本书里少了什么"必须说清楚 —— 用户看一眼是为了
+                   决定要不要回去重来，不是为了看一句"打包成功"。 -->
+              <div class="done-alerts" id="d-alerts" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 决定34：这屏唯一的动作是"拿到它"，所以右下角只有两个真按钮：
+             再来一本、打开这本书。"打开所在目录"是给已经知道自己在干什么的人
+             留的后门（做成"打开这本书"下方一行带虚线的小字），
+             它既不该跟主按钮平起平坐，也不该消失。 -->
+        <div class="actions">
+          <div class="spacer"></div>
+          <div class="done-exit">
+            <div class="done-exit-row">
+              <button class="ghost" id="btn-again">再来一本</button>
+              <button class="primary" id="btn-done-read">打开这本书</button>
+            </div>
+            <button class="dashed" id="btn-done-open">打开所在目录</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 错误 -->
+<div class="view" id="view-error">
+  <main>
+    <div class="sheet wide">
+      <div class="col">
+        <div class="pagetop">
+          <span class="pgno" id="e-no">00</span>
+          <span class="pgname" id="e-name">出问题了</span>
+        </div>
+        <div class="scroll">
+          <div class="err-main">
+            <div class="err-head">
+              <div class="err-head-in">
+                <h1 class="err-title" id="e-title">没能处理这个文件</h1>
+                <div class="err-body" id="e-body"></div>
+              </div>
+            </div>
+            <details class="err-more" id="e-more" hidden>
+              <summary>技术细节</summary>
+              <pre id="e-detail"></pre>
+            </details>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="spacer"></div>
+          <div class="err-exit">
+            <button class="ghost" id="btn-back">换一个文件</button>
+            <button class="dashed" id="btn-err-continue" hidden>仍然继续</button>
+            <button class="dashed" id="btn-err-reveal" hidden>打开所在目录</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 关于：一块牌记。整屏只有一枚印和一行版本号，Esc 或点空白处回首页。 -->
+<div class="view" id="view-about">
+  <main>
+    <div class="ab-mark"></div>
+    <div class="ab-ver" id="ab-ver"></div>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // pywebview 注入的桥在 pywebviewready 之后才可用。所有调用前先等它。
+  var bridgeReady = false;
+  var pendingPath = null;   // 桥还没好时拖进来的文件先存这儿
+  var currentJob = null;
+  var currentPayload = null;
+  var pollTimer = null;
+
+  var el = function (id) { return document.getElementById(id); };
+
+  // 五个视图就是流程的五步（design §4）。复核那一步是可选的，
+  // 但它确实是流程里的一站，跳过它不改变后面是第几步 —— 编号跟着视图走，
+  // 不跟着"走了几条路"走，否则同一步在不同路径下编号不同，更让人迷惑。
+  // 号码写在页面左上角（.pgno），不写在顶栏：顶栏只放"这是什么程序"，
+  // "我走到哪了"属于这一页的内容。号码写成两位（02），不写"2 / 5"。
+  var STEP_OF = { result: 2, review: 3, meta: 4, done: 5 };
+  var STEP_NAME = { 1: "拖进一本书", 2: "看清洗结果", 3: "复核删改", 4: "确认书名与封面", 5: "完成" };
+
+  function setView(name) {
+    // 离开这一屏就把它的定时器全掐掉，否则轮换文案会一直在后台跑。
+    if (name !== "busy") { busyLeave(); }
+    document.body.setAttribute("data-view", name);
+    var n = STEP_OF[name];
+    if (!n) { return; }
+    var host = el("view-" + name);
+    if (!host) { return; }
+    var no = host.querySelector(".pgno");
+    var nm = host.querySelector(".pgname");
+    if (no) { no.textContent = (n < 10 ? "0" : "") + n; }
+    if (nm) { nm.textContent = STEP_NAME[n]; }
+  }
+
+  function text(node, s) { node.textContent = s; }
+
+  function num(n) {
+    return (n === null || n === undefined || n === "") ? "—" : Number(n).toLocaleString("zh-CN");
+  }
+
+  // 文件大小：按量级换单位。
+  // 「0.00 MB」对小文件是废信息 —— 一本 200KB 的短篇会显示成"0.00 MB"，
+  // 看上去像没读到文件。阈值放在 1 KB / 1 MB 两档，其余保留一位小数。
+  function bytes_human(n) {
+    if (n === null || n === undefined || isNaN(n)) { return "—"; }
+    var b = Number(n);
+    if (b < 1024) { return b + " B"; }
+    if (b < 1024 * 1024) { return (b / 1024).toFixed(b < 10240 ? 1 : 0) + " KB"; }
+    return (b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+  }
+
+  // ---------- 与后端说话 ----------
+
+  function api() {
+    return (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
+  }
+
+  // 兜底页面。三件事必须分开说：
+  // ①**是什么**（标题）+ **该怎么办**（正文）—— 都是人话，类名与异常原文不进正文；
+  // ②**技术细节**收在折角里，默认关着，出问题时人要的是「怎么办」不是「哪一行」；
+  // ③**出口按上下文给**：从 ④ 页打包失败退回去是「回上一步」，不是「换一个文件」——
+  //   后者会把 currentJob/currentPayload 清空，用户刚拖进来的书、刚改好的书名全没了。
+  // 早先全页只有一个「换一个文件」，21 处调用点不管出什么事都把人踢回首页，
+  // 最严重的是 ⑤ 页打不开阅读器 —— 成品就在盘上，界面却把这一场会话忘了。
+  var errBack = null;     // { view, label }
+  var errReveal = "";     // 目录或文件路径
+  var errContinue = null; // 函数：默认拒收、但用户可以硬来（目前只有整本糊行）
+
+  function showError(title, body, opts) {
+    opts = opts || {};
+    stopPolling();
+    text(el("e-title"), title || "没能处理这个文件");
+    text(el("e-body"), body || "");
+
+    // 按下这一页时人在第几步 —— 页码条让人知道「是哪一步断的」。
+    var step = opts.step || 0;
+    var stepName = opts.stepName || "出问题了";
+    el("e-no").textContent = step ? (step < 10 ? "0" + step : String(step)) : "00";
+    el("e-name").textContent = stepName;
+
+    // 技术细节
+    var detail = String(opts.detail || "");
+    var more = el("e-more");
+    el("e-detail").textContent = detail;
+    more.hidden = !detail;
+    more.open = false;
+
+    // 出口 1：退回去（不清会话）或换一个文件（清会话）
+    errBack = opts.back || null;
+    var backBtn = el("btn-back");
+    if (errBack) {
+      backBtn.className = "ghost";
+      backBtn.textContent = errBack.label || "回上一步";
+    } else {
+      backBtn.className = "primary";
+      backBtn.textContent = "换一个文件";
+    }
+
+    // 出口 2：打开所在目录（成品还在盘上的时候）
+    errReveal = String(opts.reveal || "");
+    el("btn-err-reveal").hidden = !errReveal;
+
+    // 出口 3：仍然继续（默认拒收、但用户可以硬来的那一种 —— 现在只有整本糊行）。
+    // 这颗按钮的文案是固定的，不随 opts 变：它表达的永远是"我知道有问题，还是要做"。
+    errContinue = typeof opts.continue === "function" ? opts.continue : null;
+    el("btn-err-continue").hidden = !errContinue;
+
+    setView("error");
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  // ★ 回来的时候先认门牌：jobId 必须还是当前活跃的那个。
+  //   stopPolling() 只清得掉 setTimeout，清不掉已经在飞的 promise ——
+  //   用户点了取消（activeJobId 置空、回上一屏），三百毫秒后那个 promise
+  //   照样会落地：done=false 就自己把轮询接回来（取消等于没取消），
+  //   done=true 就直接把用户弹回结果页。两道门都要查。
+  function poll(jobId, onDone) {
+    var a = api();
+    if (!a) { showError("界面没有连上后端", "pywebview 的桥没有注入成功。请重启程序；如果反复出现，说明打包缺了 webview 的 hooks。",
+      { step: 2, stepName: "看清洗结果" }); return; }
+    a.job_poll(jobId).then(function (res) {
+      if (jobId !== activeJobId) { return; }
+      if (!res) { showError("后端没有回应", "job_poll 返回了空值。", { step: 2, stepName: "看清洗结果" }); return; }
+      if (res.error) {
+        var errOpts = { step: 2, stepName: "看清洗结果", detail: res.error_detail };
+        // 后端标了「默认拒收、但用户可以硬来」（现在只有整本糊行这一类），
+        // 就把错误页的「仍然继续」亮出来 —— 点的还是这次被拒的那个 jobId，
+        // 后端靠它在会话表里找回同一本书。
+        if (res.can_continue) {
+          errOpts.continue = function () { forceImport(jobId); };
+        }
+        showError(res.error_title || "清洗失败", res.error, errOpts);
+        return;
+      }
+      if (res.done) {
+        stopPolling();
+        // onDone：跑完之后去哪一屏由调用者决定（改样之后直接进 ④，
+        // 而不是先回 ③ 再让人点一次）。
+        if (onDone) { onDone(res.payload); } else { render(res.payload); }
+        return;
+      }
+      pollTimer = setTimeout(function () { poll(jobId, onDone); }, 300);
+    }).catch(function (err) {
+      if (jobId !== activeJobId) { return; }
+      showError("轮询出错", "等这本书的时候，界面和后台失去了一次联系。\n\n书还在原来那个位置，再拖一次就行。",
+        { step: 2, stepName: "看清洗结果", detail: String(err) });
+    });
+  }
+
+  // ---------- ② 处理中 ----------
+  //
+  // 这一屏不报进度（决定7）：没有百分比、没有阶段名、没有路径。它只回答
+  // 一件事 —— 这里在干活，而且不会停。
+  //
+  // 背景演"这本书正在被怎么样"，两套：
+  //   clean（导入 / 复核 / 重跑）：广告行被划掉、碎行被并回一段；
+  //   ink  （付梓）：一枚枚字模压到纸上，从虚到实。
+  // 前景两套共用：书名 + 一句祈祷文案。
+  //
+  // 文案（决定9）：越像"正在校对"越糟 —— 一闪而过时读成"刚校对完"，
+  // 卡住时又读成"到这一步了"。所以只写与工序无关、明显不承载信息的话。
+  // 四类流程各一套，别让人在三次不同的事情上看到同一句。
+  var PRAYERS = {
+    import: ["正在检字", "墨正在醒", "字在纸上等", "手还没停"],
+    build:  ["正在上墨", "正在覆纸", "正在压印", "纸在等墨干"],
+    review: ["正在校样", "正在核红", "手还没停"],
+    rerun:  ["正在改样", "正在换字", "墨重新醒"]
+  };
+
+  var busyKind = "import";
+  var busyIdx = 0;
+  var busyReturn = "drop";       // 取消之后退回哪一屏：取消 = 这次没发生
+  var busyRevealTimer = null;
+  var busyRotateTimer = null;
+  var busyFadeTimer = null;
+  var activeJobId = null;        // 当前这一屏背后真正在跑的任务，取消时要用
+
+  // ---------- ② 处理中：背景 ----------
+  //
+  // 两套共用一个骨架：量出前景占的那块（bgKeepOut）、在屏上找个不打架的
+  // 位置、造一片、演完化掉、再补下一片。区别只在"一片是什么"和"它做什么"。
+
+  // 这一屏飘的字必须是这本书自己的：由后端 api.import_excerpt(path) 在拖入时
+  // 只读解码文件头挑出来（真广告行 / 真断行对 / 相邻两行真正文），装进 bgFeed。
+  // 不再放写死的样例文字 —— 用户一眼就认得出「那不是我的书」。EPUB 或读不出
+  // 内容时 bgFeed 为空，这一屏宁可安静，也不拿假字凑数。
+  // 演的是"这本书里有这样的行会被处理"，不是"本次运行删掉了第 7 行"。
+  var bgFeed = null;             // { drop: [str], merge: [[str, str]] } 或 null
+  var bgFeedSeq = 0;             // 换书时作废旧一次异步回报，别让新屏飘旧书的话
+
+  // 上字模的字只从这本书自己的正文里抽（payload.glyphs，见 api._book_glyphs）。
+  // 这里不再放写死的《兰亭集序》兜底：0 章书、纯外文、纯图之类抽不出真字时，
+  // 宁可这一屏一枚字模都不印，也不能印一段跟这本书无关的古文 —— 用户一眼
+  // 就能认出来那不是自己的书。取不到就返回空串，bgTickInk 会跳过造字。
+  function bgGlyphSource() {
+    var g = currentPayload && currentPayload.glyphs;
+    if (typeof g === "string" && g.length >= 8) { return g; }
+    return "";
+  }
+
+  var bgMode = "";               // "" / "clean" / "ink"
+  var bgStage = null;
+  var bgTimers = [];             // 这一轮背景排下的所有定时器，退出时一次清干净
+  var bgLive = [];               // 清洗：在场碎片的像素盒
+  var bgSlots = [];              // 付梓：位置池
+  var bgKeepOut = null;          // 前景占的那块，谁也不许落进去
+  var bgQueues = { drop: [], merge: [] };
+  var bgGlyphIdx = 0;
+  // 屏越大，同时在场的碎片越多 —— 但"疏密"要一样，所以按面积折算。
+  var BG_AREA0 = 1013 * 580;
+
+  var bgRand = function (a, b) { return a + Math.random() * (b - a); };
+
+  // 所有延时都走这里，退出时能一次清干净（漏一个，切屏之后还会冒出来）。
+  function bgLater(fn, ms) {
+    var t = setTimeout(function () {
+      var k = bgTimers.indexOf(t);
+      if (k >= 0) { bgTimers.splice(k, 1); }
+      fn();
+    }, ms);
+    bgTimers.push(t);
+    return t;
+  }
+
+  // 后端给的真内容校验成固定形状，免得桥上带回怪东西把动画搞坏。
+  // 这里只裁长度、不改写字：飘在屏上的每一个字都还是原文里的。
+  function normalizeFeed(res) {
+    if (!res || typeof res !== "object") { return null; }
+    var out = { drop: [], merge: [] };
+    var i, v;
+    if (Object.prototype.toString.call(res.drop) === "[object Array]") {
+      for (i = 0; i < res.drop.length && out.drop.length < 24; i++) {
+        v = res.drop[i];
+        if (typeof v === "string" && v) { out.drop.push(v.slice(0, 40)); }
+      }
+    }
+    if (Object.prototype.toString.call(res.merge) === "[object Array]") {
+      for (i = 0; i < res.merge.length && out.merge.length < 24; i++) {
+        v = res.merge[i];
+        if (Object.prototype.toString.call(v) === "[object Array]" &&
+            typeof v[0] === "string" && typeof v[1] === "string" && v[0] && v[1]) {
+          out.merge.push([v[0].slice(0, 40), v[1].slice(0, 40)]);
+        }
+      }
+    }
+    return (out.drop.length || out.merge.length) ? out : null;
+  }
+
+  function bgStop() {
+    for (var i = 0; i < bgTimers.length; i++) { clearTimeout(bgTimers[i]); }
+    bgTimers = [];
+    if (bgStage) { bgStage.innerHTML = ""; }
+    bgStage = null;
+    bgLive = [];
+    bgSlots = [];
+    bgKeepOut = null;
+    bgQueues = { drop: [], merge: [] };
+    bgMode = "";
+  }
+
+  // 书名 + 文案占的那块（像素），碎纸与字模都不许落进去。
+  // 横向让得比纵向开：同一高度上的碎纸贴到书名边上，会被读成书名的注脚。
+  // 纵向本来就像纸边上的字，让开一点点就够。
+  function bgMeasure() {
+    bgKeepOut = null;
+    if (!bgStage) { return; }
+    var st = bgStage.getBoundingClientRect();
+    var t = el("busy-name");
+    var l = el("busy-line");
+    var tr = t ? t.getBoundingClientRect() : null;
+    var lr = l ? l.getBoundingClientRect() : null;
+    if (!tr || (!tr.width && !lr)) { return; }
+    if (!lr || !lr.width) { lr = tr; }
+    var left = Math.min(tr.left, lr.left) - st.left;
+    var right = Math.max(tr.right, lr.right) - st.left;
+    var top = Math.min(tr.top, lr.top) - st.top;
+    var bottom = Math.max(tr.bottom, lr.bottom) - st.top;
+    var padX = bgMode === "ink" ? 52 : 96;
+    var padY = bgMode === "ink" ? 40 : 58;
+    bgKeepOut = { l: left - padX, t: top - padY, r: right + padX, b: bottom + padY };
+  }
+
+  function bgStageSize() {
+    if (!bgStage) { return { w: 0, h: 0 }; }
+    return { w: bgStage.clientWidth, h: bgStage.clientHeight };
+  }
+
+  // ---- 清洗：一片碎纸 ----
+
+  function bgNextSample(kind) {
+    var src = (bgFeed && bgFeed[kind]) ? bgFeed[kind] : [];
+    if (!src.length) { return null; }   // 没有真内容就不造这一片
+    var q = bgQueues[kind];
+    if (!q.length) {
+      // 一轮之内每句只上一次：同屏并排两条一模一样的碎行，一眼就看穿是动画。
+      q = src.slice();
+      for (var i = q.length - 1; i > 0; i--) {
+        var j = (Math.random() * (i + 1)) | 0;
+        var t = q[i]; q[i] = q[j]; q[j] = t;
+      }
+      bgQueues[kind] = q;
+    }
+    return q.pop();
+  }
+
+  function bgTypeInto(node, str) {
+    for (var i = 0; i < str.length; i++) {
+      var sp = document.createElement("span");
+      sp.className = "ch";
+      sp.textContent = str.charAt(i);
+      sp.style.transitionDelay = Math.round(i * 20) + "ms";
+      node.appendChild(sp);
+    }
+  }
+
+  // 位置：不用固定槽位表 —— 碎片宽度差得远（一条广告 240px，一截碎行 60px），
+  // 按格子摆会一边挤一边空。先造出来量到实际尺寸，再找一个放得下、又跟别人
+  // 不打架的地方；找不到就一级级把缝收紧，宁可密一点，也不要只剩两片像卡住了。
+  var BG_GAPS = [[26, 20], [16, 12], [8, 6], [2, 2]];
+
+  function bgPlaceClean(w, h) {
+    var sz = bgStageSize();
+    var fw = sz.w, fh = sz.h;
+    var mx = 24, my = 22;
+    var halfW = w / 2, halfH = h / 2;
+    if (fw - 2 * mx < w || fh - 2 * my < h) { return null; }
+
+    for (var g = 0; g < BG_GAPS.length; g++) {
+      var gx = BG_GAPS[g][0], gy = BG_GAPS[g][1];
+      var best = null, bestNear = -1;
+      for (var t = 0; t < 90; t++) {
+        var x = bgRand(mx + halfW, fw - mx - halfW);
+        var y = bgRand(my + halfH, fh - my - halfH);
+        var box = { l: x - halfW, t: y - halfH, r: x + halfW, b: y + halfH };
+
+        // 右下角是「取消」，它必须点得到。
+        if (box.r > fw - 170 && box.b > fh - 120) { continue; }
+        if (bgKeepOut &&
+            !(box.r < bgKeepOut.l || box.l > bgKeepOut.r ||
+              box.b < bgKeepOut.t || box.t > bgKeepOut.b)) { continue; }
+
+        var clash = false, near = 1e9;
+        for (var i = 0; i < bgLive.length; i++) {
+          var o = bgLive[i];
+          if (!(box.r < o.l - gx || box.l > o.r + gx ||
+                box.b < o.t - gy || box.t > o.b + gy)) { clash = true; break; }
+          // 不打架还不够：还要尽量离得远。取"最近的邻居有多远"打分。
+          var dx = Math.max(0, Math.max(o.l - box.r, box.l - o.r));
+          var dy = Math.max(0, Math.max(o.t - box.b, box.t - o.b));
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d < near) { near = d; }
+        }
+        if (clash) { continue; }
+        if (near > bestNear) { bestNear = near; best = { x: x, y: y, box: box }; }
+      }
+      if (best) { return best; }     // 这一级已经够松，不必再收紧
+    }
+    return null;
+  }
+
+  // kind: "drop" 划掉 / "merge" 并段
+  function bgSpawnClean(kind) {
+    var sample = bgNextSample(kind);
+    if (!sample) { return false; }   // 这本书没有这类真内容，这一片就不造
+    var pc = document.createElement("div");
+    var pl = null, mg = null;
+
+    if (kind === "drop") {
+      pl = document.createElement("div");
+      pl.className = "bg-line";
+      bgTypeInto(pl, sample);
+      var rk = document.createElement("i");
+      rk.className = "bg-rk";
+      pl.appendChild(rk);
+      pc.appendChild(pl);
+    } else {
+      mg = document.createElement("div");
+      mg.className = "bg-merge";
+      var x1 = document.createElement("span");
+      x1.className = "bg-ml";
+      x1.textContent = sample[0];
+      var x2 = document.createElement("span");
+      x2.className = "bg-ml";
+      x2.textContent = sample[1];
+      mg.appendChild(x1);
+      mg.appendChild(x2);
+      pc.appendChild(mg);
+    }
+    pc.className = "bg-pc";
+
+    // 先挂到一个不出现在屏上的位置量尺寸（opacity 0 由默认值承担）。
+    pc.style.left = "-9999px";
+    pc.style.top = "-9999px";
+    bgStage.appendChild(pc);
+
+    var spot = bgPlaceClean(pc.offsetWidth, pc.offsetHeight);
+    if (!spot) {
+      bgStage.removeChild(pc);
+      return false;                  // 屏上实在挤不下，这一枚就算了
+    }
+
+    pc.style.left = spot.x.toFixed(1) + "px";
+    pc.style.top = spot.y.toFixed(1) + "px";
+    pc.style.setProperty("--rot", bgRand(-2.6, 2.6).toFixed(2) + "deg");
+    // 纸有新旧：有的字清楚，有的只剩一点影。红线不跟着淡 —— 它要一直是真的。
+    pc.style.setProperty("--pa", bgRand(0.86, 1).toFixed(2));
+
+    bgLive.push(spot.box);
+    pc._box = spot.box;
+    pc.classList.add("in");
+
+    var t0;
+    if (kind === "drop") {
+      pl.classList.add("on");                       // 逐字打出来
+      var typeMs = pl.textContent.length * 20 + 260;
+      var t1 = typeMs + 300;                        // 打完停一下，再划
+      bgLater(function () { pl.classList.add("rule"); }, t1);
+      t0 = t1 + 430 + 240;                          // 划完几乎不停，一起化
+    } else {
+      // 两截各自打出来之后才谈得上"缝"。按行字数算，别写死。
+      var tm = Math.max(x1.textContent.length, x2.textContent.length) * 20 + 420;
+      bgLater(function () { mg.classList.add("merged"); }, tm);
+      t0 = tm + 980 + 700;                          // 缝收拢、看清是一个段，再化
+    }
+
+    // 整块（字与红线）一起化掉，不在屏上留痕。
+    bgLater(function () {
+      pc.classList.remove("in");
+      pc.classList.add("out");
+      bgLater(function () {
+        var k = bgLive.indexOf(pc._box);
+        if (k >= 0) { bgLive.splice(k, 1); }
+        if (pc.parentNode) { pc.parentNode.removeChild(pc); }
+      }, 820);
+    }, t0);
+
+    return true;
+  }
+
+  // ---- 付梓：一枚字模 ----
+
+  function bgBuildSlots() {
+    bgSlots = [];
+    var sz = bgStageSize();
+    var fw = sz.w, fh = sz.h;
+    if (!fw || !fh) { return; }
+    // 抖动网格：纯网格读作表格，纯随机读作画糊了，两个点会叠在一起。
+    var COLS = 9, ROWS = 5;
+    var placed = [];
+    var MIN_D = 0.135;
+    for (var r = 0; r < ROWS; r++) {
+      for (var c = 0; c < COLS; c++) {
+        var ok = false, x = 0, y = 0;
+        for (var t = 0; t < 60 && !ok; t++) {
+          x = 0.06 + ((c + 0.5) / COLS) * 0.88 + bgRand(-0.5, 0.5) * (0.88 / COLS) * 0.82;
+          y = 0.09 + ((r + 0.5) / ROWS) * 0.82 + bgRand(-0.5, 0.5) * (0.82 / ROWS) * 0.82;
+          if (x < 0.04 || x > 0.96 || y < 0.055 || y > 0.945) { continue; }
+          var far = true;
+          for (var i = 0; i < placed.length; i++) {
+            var ax = x - placed[i][0];
+            var ay = (y - placed[i][1]) * 1.5;   // 竖向拉长：窗口矮时不挤
+            if (ax * ax + ay * ay < MIN_D * MIN_D) { far = false; break; }
+          }
+          if (!far) { continue; }
+          ok = true;
+        }
+        if (!ok) { continue; }
+        placed.push([x, y]);
+
+        var slot = document.createElement("div");
+        slot.className = "bg-slot";
+        slot.style.left = (x * 100).toFixed(2) + "%";
+        slot.style.top = (y * 100).toFixed(2) + "%";
+        var blk = document.createElement("div");
+        blk.className = "bg-blk";
+        var gl = document.createElement("span");
+        gl.className = "bg-glyph";
+        blk.appendChild(gl);
+        slot.appendChild(blk);
+        bgStage.appendChild(slot);
+        bgSlots.push({ x: x, y: y, busy: false, blk: blk, gl: gl });
+      }
+    }
+  }
+
+  // 这枚字模的中心能不能落在那儿：右下角是「取消」、中间是书名。
+  function bgInkBlocked(x, y) {
+    var sz = bgStageSize();
+    var px = x * sz.w, py = y * sz.h;
+    if (px > sz.w - 150 && py > sz.h - 96) { return true; }
+    if (!bgKeepOut) { return false; }
+    return px > bgKeepOut.l && px < bgKeepOut.r &&
+           py > bgKeepOut.t && py < bgKeepOut.b;
+  }
+
+  // 取下一枚该印的字。
+  // 字模表本身已经去过重（后端 _book_glyphs 保证 48 个互不相同），但表是会
+  // 绕圈的：付梓等待动辄一分钟，每秒添一枚，绕回表头时表头那几个字可能还活
+  // 在屏幕上 —— 同一枚字印两遍，看着就像画面卡住了（试用反馈第 3 条）。
+  // 所以取字时跳过"此刻正印在屏幕上"的那些，绕一圈也撞不上。
+  function bgNextGlyph() {
+    var src = bgGlyphSource();
+    if (!src) { return ""; }
+    var n = src.length;
+    var live = {};
+    for (var i = 0; i < bgSlots.length; i++) {
+      if (bgSlots[i].busy && bgSlots[i].gl) { live[bgSlots[i].gl.textContent] = true; }
+    }
+    for (var k = 0; k < n; k++) {
+      var ch = src.charAt((bgGlyphIdx + k) % n);
+      if (!live[ch]) {
+        bgGlyphIdx = (bgGlyphIdx + k + 1) % n;
+        return ch;
+      }
+    }
+    // 全表恰好在场（字模表比屏幕放得下的还少）：只能按顺序重复了。
+    var one = src.charAt(bgGlyphIdx % n);
+    bgGlyphIdx = (bgGlyphIdx + 1) % n;
+    return one;
+  }
+
+  function bgBornInk(slot) {
+    var ch = bgNextGlyph();
+    if (!ch) { return; }   // 没有真字就不占这个位置，也不排队空字模
+    slot.busy = true;
+    slot.gl.textContent = ch;
+    slot.blk.style.setProperty("--rot", bgRand(-2.4, 2.4).toFixed(1) + "deg");
+    // 每一枚自己的呼吸周期：8–14 秒。全都一样就成了心跳。
+    slot.blk.style.setProperty("--bt", Math.round(bgRand(8000, 14000)) + "ms");
+    slot.blk.classList.remove("out");
+    slot.blk.classList.add("in");
+
+    // 活 9–16 秒，少数活到 22 秒（少数活很久，画面才有"底"）。
+    var hold = bgRand(9000, 16000);
+    if (Math.random() < 0.12) { hold = bgRand(17000, 22000); }
+
+    bgLater(function () {
+      slot.blk.classList.remove("in");
+      slot.blk.classList.add("out");
+      bgLater(function () {
+        slot.blk.classList.remove("out");
+        slot.busy = false;
+      }, 2400);
+    }, 2000 + hold);
+  }
+
+  // ---- 节奏：一片接一片，疏密由一条很慢的正弦调制 ----
+  // 不是"一波一波"：波次会让画面读作机器在按批干活。这里连续不断，
+  // 只是有时四五片同时在，有时只剩一片。周期 41 秒 —— 比任何一次等待都长。
+  var bgT0 = 0;
+
+  function bgBreath() {
+    var ph = ((Date.now() - bgT0) / 41000) * Math.PI * 2 - Math.PI / 2;
+    return (Math.sin(ph) + 1) / 2;   // 0 = 最疏，1 = 最密
+  }
+
+  function bgTickClean() {
+    var b = bgBreath();
+    var sz = bgStageSize();
+    var area = (sz.w * sz.h) / BG_AREA0;
+    var scale = Math.min(1.5, Math.max(0.92, area));
+    var target = Math.max(4, Math.round((5 + b * 4) * scale));
+
+    if (bgLive.length < target) {
+      // 这本书里有什么真内容就演什么：只有碎行对时别一直空转 drop。
+      // 两种都没有（EPUB、读不出内容）就一片都不造，这一屏安静。
+      var hasDrop = !!(bgFeed && bgFeed.drop && bgFeed.drop.length);
+      var hasMerge = !!(bgFeed && bgFeed.merge && bgFeed.merge.length);
+      var kind = (hasDrop && hasMerge) ? (Math.random() < 0.62 ? "drop" : "merge")
+               : hasDrop ? "drop" : hasMerge ? "merge" : null;
+      if (kind) { bgSpawnClean(kind); }
+    }
+    bgLater(bgTickClean, 330 + (1 - b) * 460 + Math.random() * 260);
+  }
+
+  function bgTickInk() {
+    // 这本书抽不出真字：一枚字模都不印，也不拿写死的古文凑数。
+    // 仍然接着排队，万一后端稍后把 glyphs 补进来还能接上。
+    if (!bgGlyphSource()) {
+      bgLater(bgTickInk, 600);
+      return;
+    }
+    var b = bgBreath();
+    var live = [], idle = [], i;
+    for (i = 0; i < bgSlots.length; i++) {
+      (bgSlots[i].busy ? live : idle).push(bgSlots[i]);
+    }
+    var target = 5 + Math.round(b * 4);   // 疏时 5 枚，密时 9 枚
+
+    if (live.length < target && idle.length) {
+      // 在空位里挑"离在场字模足够远"的。
+      // ★ 不挑最远的那个 —— 挑最远会把字模全推到四角、中间空一圈，读作"描了个边框"。
+      var GOOD = 0.20, ok = [], best = null, bestD = -1;
+      for (i = 0; i < idle.length; i++) {
+        var sp = idle[i], near = 9;
+        for (var m = 0; m < live.length; m++) {
+          var dx = sp.x - live[m].x, dy = (sp.y - live[m].y) * 1.5;
+          var d = dx * dx + dy * dy;
+          if (d < near) { near = d; }
+        }
+        if (!bgInkBlocked(sp.x, sp.y) && near >= GOOD * GOOD) { ok.push(sp); }
+        if (near > bestD) { bestD = near; best = sp; }
+      }
+      var sel = ok.length ? ok[(Math.random() * ok.length) | 0]
+                          : (bgInkBlocked(best.x, best.y) ? null : best);
+      if (sel) { bgBornInk(sel); }
+    }
+    // 补一枚的间隔：密时 480–760ms，疏时 1100–1600ms
+    bgLater(bgTickInk, 480 + (1 - b) * 640 + Math.random() * 280);
+  }
+
+  // 开工：mode = "clean" 划掉并段 / "ink" 压字模。两套共用同一批可见性规则。
+  function bgStart(mode) {
+    bgStop();
+    bgMode = mode;
+    bgStage = el("busy-stage");
+    if (!bgStage) { return; }
+    bgStage.className = "busy-stage" + (mode === "ink" ? " is-ink" : "");
+    bgT0 = Date.now();
+    bgMeasure();
+    if (mode === "ink") {
+      // 每次付梓都从这套字模的第一个字开始印；接着上一轮往下数，
+      // 第二本书会从上一本的第七个字起步 —— 看不出问题，但不对。
+      bgGlyphIdx = 0;
+      bgBuildSlots();
+    }
+    // 前面留一口气：决定9 —— 快的时候用户根本看不到这一屏。
+    bgLater(mode === "ink" ? bgTickInk : bgTickClean, 900);
+  }
+
+  // 换一句、改字号、改窗口，书名那块矩形都会变 —— 重新量。
+  window.addEventListener("resize", function () { bgMeasure(); });
+
+  // ---------- ② 处理中：进出 ----------
+
+  function busyLeave() {
+    if (busyRevealTimer) { clearTimeout(busyRevealTimer); busyRevealTimer = null; }
+    if (busyRotateTimer) { clearTimeout(busyRotateTimer); busyRotateTimer = null; }
+    if (busyFadeTimer) { clearTimeout(busyFadeTimer); busyFadeTimer = null; }
+    bgStop();
+    var f = el("busy-fore");
+    if (f) { f.classList.remove("on"); }
+    var ln = el("busy-line");
+    if (ln) { ln.classList.remove("on"); }
+    var c = el("btn-cancel");
+    if (c) { c.classList.remove("on"); }
+  }
+
+  // 前 1.1 秒整屏空白（决定9）：清洗快的时候这一屏根本不该被看见。
+  function busyEnter(kind, title, back) {
+    busyLeave();
+    busyKind = PRAYERS[kind] ? kind : "import";
+    busyIdx = 0;
+    busyReturn = back || "drop";
+    activeJobId = null;
+    var nm = el("busy-name");
+    nm.textContent = title || "";
+    nm.hidden = !title;
+    var ln = el("busy-line");
+    ln.textContent = "";
+    ln.classList.remove("on");
+    setView("busy");
+    // 付梓是最后一道工序，演压缩字模；其余三种都在动纸上的字。
+    bgStart(busyKind === "build" ? "ink" : "clean");
+    busyRevealTimer = setTimeout(function () {
+      busyRevealTimer = null;
+      el("busy-fore").classList.add("on");
+      el("btn-cancel").classList.add("on");
+      busySay(0);
+    }, 1100);
+  }
+
+  // 一句话不是"换"上去的，是淡进淡出的：8.4 秒一句，太快就是跑马灯，
+  // 人还没读完就换了。
+  function busySay(i) {
+    var list = PRAYERS[busyKind] || PRAYERS.import;
+    busyIdx = i % list.length;
+    var ln = el("busy-line");
+    ln.textContent = list[busyIdx];
+    ln.classList.add("on");
+    busyRotateTimer = setTimeout(function () {
+      ln.classList.remove("on");
+      busyFadeTimer = setTimeout(function () {
+        busyFadeTimer = null;
+        busySay(busyIdx + 1);
+      }, 900);
+    }, 8400);
+  }
+
+
+  // 文件名去掉目录、去掉扩展名 —— 路径不是必要信息（决定8），
+  // 用户刚给过；他认得的是书名。
+  function metaTitle() {
+    var m = currentPayload && currentPayload.meta;
+    return (m && m.title) || "";
+  }
+
+  function bookNameOf(path) {
+    var s = String(path || "");
+    var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf(String.fromCharCode(92)));
+    if (i >= 0) { s = s.slice(i + 1); }
+    return s.replace(/\.[^.]+$/, "");
+  }
+
+  function startImport(path) {
+    if (!path) { return; }
+    var a = api();
+    if (!a) {
+      // 桥还没注入完：先记下来，等 pywebviewready 再发。丢文件比报错更让人困惑。
+      pendingPath = path;
+      return;
+    }
+    stopPolling();
+    // 等待页要飘这本书自己的话：拖入的同时只读取几行真内容（不耽误清洗）。
+    // 后端没有这个方法、或读不出内容时，这一屏宁可安静也不飘假样例。
+    var seq = ++bgFeedSeq;
+    bgFeed = null;
+    busyEnter("import", bookNameOf(path), "drop");
+    Promise.resolve(a.import_excerpt ? a.import_excerpt(path) : null)
+      .then(function (feed) {
+        if (seq !== bgFeedSeq) { return; }   // 又拖了别的书：别让新屏飘旧书的话
+        bgFeed = normalizeFeed(feed);
+        bgQueues = { drop: [], merge: [] };  // 换了内容源，重新洗牌
+      })
+      .catch(function () { /* 取不到就安静，不必打扰用户 */ });
+    a.import_file(path).then(function (res) {
+      if (!res || !res.job_id) {
+        showError("没能开始", (res && res.error) || "后端没有给出任务号。",
+          { step: 2, stepName: "看清洗结果" });
+        return;
+      }
+      currentJob = res.job_id;
+      activeJobId = res.job_id;
+      poll(currentJob);
+    }).catch(function (err) {
+      showError("没能开始", "这本书没能交到清洗那一步。\n\n换个文件再试一次。",
+        { step: 2, stepName: "看清洗结果", detail: String(err) });
+    });
+  }
+
+  // 错误页「仍然继续」：只在后端把这次失败标成"默认拒收、但用户可以硬来"时才出现
+  // （目前只有整本糊行）。后端 force_import 拿这个 jobId 找回同一个 Session、挂上旗子
+  // 再洗一遍；界面这边照正常导入重新走忙碌屏和轮询，不特殊对待 —— 出口是口子，不是另一条流程。
+  function forceImport(jobId) {
+    if (!jobId) { return; }
+    var a = api();
+    if (!a) {
+      showError("界面没有连上后端", "pywebview 的桥没有注入成功。请重启程序。",
+        { step: 2, stepName: "看清洗结果" });
+      return;
+    }
+    stopPolling();
+    // 还是同一本书：沿用上次拖入时取到的真内容，不重新读文件（force 走的是
+    // 同一个 Session）。忙碌屏的书名还留在 busy-name 里，也直接沿用。
+    ++bgFeedSeq;
+    busyEnter("import", el("busy-name").textContent, "drop");
+    a.force_import(jobId).then(function (res) {
+      if (!res || !res.job_id) {
+        showError("没能继续", (res && res.error) || "后端没有给出任务号。",
+          { step: 2, stepName: "看清洗结果" });
+        return;
+      }
+      currentJob = res.job_id;
+      activeJobId = res.job_id;
+      poll(currentJob);
+    }).catch(function (err) {
+      showError("没能继续", "这本书没能再洗一遍。\n\n换个文件再试一次。",
+        { step: 2, stepName: "看清洗结果", detail: String(err) });
+    });
+  }
+
+  // ---------- ② 结果页渲染 ----------
+
+  // 一个数 + 它下面那个小标签。三个数并排就是一页账。
+  function rfig(value, unit) {
+    var wrap = document.createElement("div");
+    wrap.className = "r-fig";
+    var b = document.createElement("b");
+    b.textContent = num(value);
+    var s = document.createElement("span");
+    s.textContent = unit;
+    wrap.appendChild(b); wrap.appendChild(s);
+    return wrap;
+  }
+
+  // 书名 = 文件名去掉扩展名。"山河故人.txt" 里的 .txt 对用户没有信息量
+  // （决定35：扩展名对用户无意义）。
+  function titleOf(payload) {
+    var n = String((payload && (payload.name || payload.file)) || "");
+    var cut = n.lastIndexOf(".");
+    if (cut > 0) { n = n.slice(0, cut); }
+    return n;
+  }
+
+  function render(payload) {
+    currentPayload = payload;
+    if (!payload) { showError("没有拿到结果", "后端返回了空的结果。", { step: 2, stepName: "看清洗结果" }); return; }
+
+    var isEpub = payload.kind === "epub";
+    var stats = payload.stats || {};
+    var dropped = payload.dropped || {};
+    var fixed = payload.fixed || {};
+    var merged = payload.merged || {};
+    var lines = payload.lines || {};
+    var imp = payload.import || {};
+
+    text(el("r-title"), titleOf(payload));
+    el("r-title").title = payload.file || "";
+
+    // 先说"这本书打开有没有东西读"，再给账单：0 字 0 章的版面跟成功一模一样，
+    // 是 §10 第 5 条实测六种异常路径后剩下的唯一文案缺口。
+    // 状态由后端算（_content_state），前端只配句子 —— 别在这儿再判一次字数。
+    var state = payload.content_state || "text";
+    var emptyBox = el("r-empty");
+    if (state === "empty") {
+      emptyBox.classList.remove("calm");
+      text(emptyBox, "一个字都没剩下 —— 整页都是目录、广告或空行。" +
+        "这样打包是一本空白书，先看原文件。");
+      emptyBox.hidden = false;
+    } else if (state === "images_only") {
+      text(emptyBox, "只有 " + num(imp.images_kept) +
+        " 张插图。照样能打包，成品里全是图。");
+      emptyBox.classList.add("calm");
+      emptyBox.hidden = false;
+    } else {
+      emptyBox.hidden = true;
+    }
+
+    // 三个数，就三个（决定12）。选这三个是因为它们各自能改变一个决定：
+    // 章节数一眼能判"切章切对没有"（7000 章还是 3 章）；删行与合并直接决定
+    // 要不要去复核。字数、编码、文件大小、行数、段落数、平均每章字数全撤 ——
+    // 字数没有分母可对照，"改写"那类量级再大也不改变"这本书还能不能读"。
+    // 删除量的绝对值本身就是信号，不需要分母。
+    var figs = el("r-figures");
+    figs.innerHTML = "";
+    if (isEpub) {
+      figs.appendChild(rfig(stats.chapters || 0, "章"));
+      figs.appendChild(rfig(imp.images_kept || 0, "图"));
+      if (imp.volumes) { figs.appendChild(rfig(imp.volumes, "卷")); }
+    } else {
+      figs.appendChild(rfig(stats.chapters || 0, "章"));
+      figs.appendChild(rfig((dropped.ad || 0) + (dropped.toc || 0), "删行"));
+      figs.appendChild(rfig(merged.groups || 0, "合并"));
+    }
+
+    // 重跑回来时交代一句"你刚才勾的生效了没有"。
+    // 原来的脚注还带产物路径，那条删了（决定15）；留下/断开是用户自己动过手的
+    // 结果，得给他回执，否则重跑完数字一变，他不知道变的是不是他勾的那些。
+    var adj = payload.adjust || {};
+    var prot = adj.protected || {};
+    var notes = [];
+    if (prot.lines) { notes.push("留下 " + num(prot.lines) + " 行该删的"); }
+    if (adj.merge_breaks_hit) { notes.push("断开 " + num(adj.merge_breaks_hit) + " 处合并"); }
+    var noteBox = el("r-note");
+    if (notes.length) { text(noteBox, notes.join(" · ")); noteBox.hidden = false; }
+    else { noteBox.hidden = true; }
+
+
+
+    // 告警最多三行（决定31）。合并、计数、排序全在后端做完了
+    // （gui/api.py 的 _alerts），前端只负责画 —— 级别不该由界面猜。
+    var alerts = payload.alerts || [];
+    var warnBox = el("r-warnings");
+    var warnList = el("r-warn-list");
+    warnList.innerHTML = "";
+    if (alerts.length) {
+      alerts.forEach(function (a) {
+        var li = document.createElement("li");
+        li.textContent = a.text;
+        warnList.appendChild(li);
+      });
+      warnBox.hidden = false;
+    } else {
+      warnBox.hidden = true;
+    }
+
+    // ③ 复核只对 TXT 有意义：它画的是 dropped_lines / 碎行合并，导入的书没有这些。
+    // 禁掉而不是隐藏 —— 按钮位置跳来跳去比灰着更让人困惑。
+    el("btn-review").disabled = isEpub;
+    el("btn-review").title = isEpub
+      ? "导入的书没有可复核的删除/合并（它没经过清洗）"
+      : "看看这次删了什么、合并了什么";
+    el("btn-epub").disabled = false;
+    el("btn-epub").title = "下一步：确认书名与作者";
+
+    // ★ 复核按钮的名单在这里复位：render 只被「清洗完成」调用一次，
+    //   旧书留下的「已看过」不能带到新书上。
+    rv.seen = {};
+
+    setView("result");
+  }
+
+  // ---------- ④ 元数据页渲染 ----------
+
+  // ---------- ③ 复核（校定） ----------
+  //
+  // 五类事实：删除 / 合并 / 切章 / 章节树 / 缺字。前两类能勾（别删 / 别并），
+  // 后三类只能看 —— 它们要么是清洗的结论，要么是字库的事实，界面里摆一个
+  // 假开关是骗人。
+  //
+  // 数据分两次要：进页面时每类只拿前 40 行（后端已压成 60 字摘要），滚到底
+  // 再要下一段；点开某一行才要那一行的上下文（决定24/25/27）。
+  // 「正文不进界面」那条铁律只管 ② 结果页 —— 这里是复核页，不给原文就没法复核。
+
+  var rv = {
+    job: "", name: "", groups: [], byKey: {}, key: "",
+    sel: -1, detail: {}, seen: {}, picked: {}, base: {}, loading: false
+  };
+
+  function rvPickKey(key, row) {
+    return key === "merge" ? "merge:" + row.cut : key + ":" + row.ln;
+  }
+
+  // 后端行里的 kept / brk 就是"当前已经是别删 / 已断开"。进页面先把它落进
+  // 勾选态，同时记一份 base —— 判断"用户改过没有"要跟 base 比，不能跟"空"
+  // 比：重跑一次之后所有勾都还在，那时没动过也不该再跑一遍。
+  function rvSeed(g) {
+    g.rows.forEach(function (r) {
+      var on = g.key === "merge" ? r.brk : r.kept;
+      if (!on) { return; }
+      var k = rvPickKey(g.key, r);
+      rv.picked[k] = true;
+      rv.base[k] = true;
+    });
+  }
+
+  function rvDirty() {
+    return Object.keys(rv.picked).sort().join(",") !== Object.keys(rv.base).sort().join(",");
+  }
+
+  function rvAdjust() {
+    var protect = [], breaks = [];
+    Object.keys(rv.picked).forEach(function (k) {
+      if (!rv.picked[k]) { return; }
+      var parts = k.split(":");
+      var n = parseInt(parts[1], 10);
+      if (!n) { return; }
+      if (parts[0] === "merge") { breaks.push(n); } else { protect.push(n); }
+    });
+    protect.sort(function (a, b) { return a - b; });
+    breaks.sort(function (a, b) { return a - b; });
+    var out = {};
+    if (protect.length) { out.protect_lines = protect; }
+    if (breaks.length) { out.merge_breaks = breaks; }
+    return out;
+  }
+
+  function rvGroup() { return rv.byKey[rv.key] || null; }
+
+  function rvAllSeen() {
+    if (!rv.groups.length) { return false; }
+    for (var i = 0; i < rv.groups.length; i++) {
+      if (!rv.seen[rv.groups[i].key]) { return false; }
+    }
+    return true;
+  }
+
+  // 五盏灯全绿时按钮转绿底。绿不是闸（决定21）——它只说明"五类都过了眼"。
+  function rvSyncGo() {
+    var go = el("btn-accept");
+    if (!go || go.classList.contains("go")) { return; }
+    go.classList.toggle("ready", rvAllSeen());
+  }
+
+  function rvDrawDir() {
+    var host = el("b-dir");
+    host.innerHTML = "";
+    rv.groups.forEach(function (g) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.dataset.k = g.key;
+      if (g.key === rv.key) { b.className = "on"; }
+      var dot = document.createElement("span");
+      dot.className = "sk-seen" + (rv.seen[g.key] ? " on" : "");
+      var nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = g.name;
+      var nu = document.createElement("span");
+      nu.className = "num";
+      nu.textContent = num(g.num);
+      b.appendChild(dot);
+      b.appendChild(nm);
+      b.appendChild(nu);
+      host.appendChild(b);
+    });
+  }
+
+  function rvDrawHead() {
+    var g = rvGroup(), host = el("b-head");
+    host.innerHTML = "";
+    if (!g) { return; }
+    var box = document.createElement("div");
+    box.className = "sk-head rise";
+    var nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = g.name;
+    var nu = document.createElement("span");
+    nu.className = "num";
+    nu.textContent = num(g.num);
+    var un = document.createElement("span");
+    un.className = "unit";
+    un.textContent = g.unit;
+    box.appendChild(nm);
+    box.appendChild(nu);
+    box.appendChild(un);
+    host.appendChild(box);
+  }
+
+  function rvDrawBar() {
+    var g = rvGroup(), host = el("b-bar");
+    host.innerHTML = "";
+    if (!g) { return; }
+    var lead = document.createElement("span");
+    lead.textContent = "共 " + num(g.num) + " " + g.unit + " · " + g.hint;
+    host.appendChild(lead);
+    if (!g.act || !g.rows.length) { return; }
+    var sp = document.createElement("span");
+    sp.className = "spacer";
+    host.appendChild(sp);
+    var all = document.createElement("button");
+    all.type = "button";
+    all.className = "sk-act";
+    all.textContent = "全选";
+    all.addEventListener("click", function () { rvSetAll(true); });
+    var none = document.createElement("button");
+    none.type = "button";
+    none.className = "sk-act";
+    none.textContent = "全不选";
+    none.addEventListener("click", function () { rvSetAll(false); });
+    host.appendChild(all);
+    host.appendChild(none);
+  }
+
+  // 这一类**全部**候选的行号。后端的 keys 是全量的（不只已经加载的 40 行），
+  // 没有 keys（旧 payload）才退回按已加载的行拼 —— 那样又变成假全选。
+  function rvAllKeys(g) {
+    if (g.keys && g.keys.length) { return g.keys; }
+    return g.rows.map(function (r) { return g.key === "merge" ? r.cut : r.ln; });
+  }
+
+  function rvSetAll(on) {
+    var g = rvGroup();
+    if (!g || !g.act) { return; }
+    // 只认后端给的全量行号：以前这里遍历 g.rows，用户得先一直往下滚、
+    // 把每页都拉出来才可能真的全选上。
+    rvAllKeys(g).forEach(function (n) {
+      var k = g.key + ":" + n;
+      if (on) { rv.picked[k] = true; } else { delete rv.picked[k]; }
+    });
+    rvDrawList();
+    rvSyncGo();
+  }
+
+  function rvRowEl(g, r, i) {
+    var li = document.createElement("li");
+    li.className = "sk-row" + (i === rv.sel ? " sel" : "");
+    li.dataset.i = i;
+    var ln = document.createElement("span");
+    ln.className = "ln";
+    ln.textContent = r.ln2 ? (r.ln + "–" + r.ln2)
+      : (r.ln === "" || r.ln === null || r.ln === undefined ? "" : String(r.ln));
+    li.appendChild(ln);
+    var tx = document.createElement("span");
+    tx.className = "tx";
+    tx.textContent = r.tx || "";
+    li.appendChild(tx);
+    if (r.tag) {
+      var tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = r.tag;
+      li.appendChild(tag);
+    }
+    if (g.act) {
+      var k = rvPickKey(g.key, r);
+      var lab = document.createElement("label");
+      lab.className = "keep";
+      var inp = document.createElement("input");
+      inp.type = "checkbox";
+      inp.checked = !!rv.picked[k];
+      if (inp.checked) { li.classList.add("kept"); }
+      inp.addEventListener("click", function (ev) { ev.stopPropagation(); });
+      inp.addEventListener("change", function () {
+        if (inp.checked) { rv.picked[k] = true; } else { delete rv.picked[k]; }
+        li.classList.toggle("kept", inp.checked);
+        rvSyncGo();
+      });
+      lab.appendChild(inp);
+      lab.appendChild(document.createTextNode(g.key === "merge" ? "别并" : "别删"));
+      li.appendChild(lab);
+    }
+    return li;
+  }
+
+  // 左右对照。左原文，右改完的样子；只读类的右栏标题换成「怎么了」。
+  function rvCmpEl(d) {
+    var wrap = document.createElement("div");
+    wrap.className = "cmp" + (d.ro ? " ro" : "");
+    var left = document.createElement("div");
+    left.className = "cmp-col";
+    var lc = document.createElement("div");
+    lc.className = "cmp-cap";
+    lc.textContent = d.lcap || "原文";
+    var lb = document.createElement("div");
+    lb.className = "cmp-body";
+    (d.left || []).forEach(function (it) {
+      var p = document.createElement("p");
+      if (it.cls) { p.className = it.cls; }
+      if (it.ln !== undefined && it.ln !== null && it.ln !== "") {
+        var gl = document.createElement("span");
+        gl.className = "gl";
+        gl.textContent = it.ln;
+        p.appendChild(gl);
+      }
+      p.appendChild(document.createTextNode(it.t || ""));
+      lb.appendChild(p);
+    });
+    left.appendChild(lc);
+    left.appendChild(lb);
+    wrap.appendChild(left);
+
+    var right = document.createElement("div");
+    right.className = "cmp-col";
+    var rc = document.createElement("div");
+    rc.className = "cmp-cap";
+    rc.textContent = d.rcap || "删除后";
+    var rb = document.createElement("div");
+    rb.className = "cmp-body";
+    if (d.prose) {
+      var pp = document.createElement("p");
+      pp.className = "cmp-prose";
+      pp.textContent = d.prose;
+      rb.appendChild(pp);
+    } else {
+      (d.right || []).forEach(function (it) {
+        var p = document.createElement("p");
+        p.textContent = it.t || "";
+        rb.appendChild(p);
+      });
+    }
+    right.appendChild(rc);
+    right.appendChild(rb);
+    wrap.appendChild(right);
+    return wrap;
+  }
+
+  function rvInlineEl(g, i) {
+    var li = document.createElement("li");
+    li.className = "b-inline";
+    var d = rv.detail[g.key + ":" + i];
+    // 后端理论上不会给空对象，但"给了一份没有内容的对照"比"还在取"更让人困惑，
+    // 所以空壳一律按未到处理。
+    if (!d || d.pending || (!d.left && !d.right && !d.prose)) {
+      var w = document.createElement("div");
+      w.className = "cmp-wait";
+      w.textContent = "正在取原文…";
+      li.appendChild(w);
+      return li;
+    }
+    if (d.error) {
+      var e = document.createElement("div");
+      e.className = "cmp-wait";
+      e.textContent = d.error;
+      li.appendChild(e);
+      return li;
+    }
+    li.appendChild(rvCmpEl(d));
+    return li;
+  }
+
+  function rvDrawList() {
+    var g = rvGroup(), host = el("b-list");
+    host.innerHTML = "";
+    if (!g) { return; }
+    if (!g.rows.length) {
+      // 缺字这一类没有逐条清单（粒度按简版走：只报个数），给一句话。
+      if (g.note) {
+        var li0 = document.createElement("li");
+        li0.className = "rv-note";
+        li0.textContent = g.note;
+        host.appendChild(li0);
+      }
+      return;
+    }
+    g.rows.forEach(function (r, i) {
+      host.appendChild(rvRowEl(g, r, i));
+      if (i === rv.sel) { host.appendChild(rvInlineEl(g, i)); }
+    });
+  }
+
+  // 展开块滚进视野：优先让选中行露出来，其次尽量把对照块也露出来。
+  function rvReveal() {
+    var wrap = document.querySelector("#view-review .b-listwrap");
+    var row = document.querySelector("#b-list .sk-row.sel");
+    var block = document.querySelector("#b-list .b-inline");
+    if (!wrap || !row) { return; }
+    var wr = wrap.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    var bh = block ? block.getBoundingClientRect().height : 0;
+    var top = 0;
+    if (block && rr.height + bh + 8 <= wr.height) {
+      var rb = block.getBoundingClientRect();
+      var need = rb.bottom - wr.bottom + 6;
+      top = need > 0 ? wrap.scrollTop + need : wrap.scrollTop;
+    } else {
+      top = wrap.scrollTop + (rr.top - wr.top) - 2;
+    }
+    wrap.scrollTop = Math.max(0, Math.min(top, wrap.scrollHeight - wrap.clientHeight));
+  }
+
+  function rvEnsureDetail(key, i) {
+    var ck = key + ":" + i;
+    if (rv.detail[ck]) { return; }
+    rv.detail[ck] = { pending: true };
+    var a = api();
+    if (!a) { return; }
+    Promise.resolve(a.review_detail(rv.job, key, i)).then(function (d) {
+      rv.detail[ck] = d || {};
+      if (rv.key === key && rv.sel === i) { rvDrawList(); rvReveal(); }
+    }).catch(function (err) {
+      rv.detail[ck] = { error: String(err) };
+      if (rv.key === key && rv.sel === i) { rvDrawList(); }
+    });
+  }
+
+  function rvDraw() {
+    rv.seen[rv.key] = true;
+    rvDrawDir();
+    rvDrawHead();
+    rvDrawBar();
+    rvDrawList();
+    rvReveal();
+    rvSyncGo();
+  }
+
+  // 滚到底再要下一段（决定27）。40 行一页，翻到边界时才发请求。
+  function rvOnScroll() {
+    var w = document.querySelector("#view-review .b-listwrap");
+    if (!w || rv.loading) { return; }
+    if (w.scrollTop + w.clientHeight < w.scrollHeight - 48) { return; }
+    rvMore();
+  }
+
+  function rvMore() {
+    var g = rvGroup();
+    if (!g || !g.more || rv.loading) { return; }
+    var a = api();
+    if (!a) { return; }
+    rv.loading = true;
+    Promise.resolve(a.review_more(rv.job, g.key, g.rows.length, 40)).then(function (res) {
+      rv.loading = false;
+      if (!res || res.error) { return; }
+      (res.rows || []).forEach(function (r) { g.rows.push(r); });
+      g.more = !!res.more;
+      rvSeed(g);
+      if (rv.key === g.key) { rvDrawList(); rvDrawBar(); }
+    }).catch(function () { rv.loading = false; });
+  }
+
+  function rvSelect(key) {
+    if (key === rv.key) { return; }
+    rv.key = key;
+    rv.sel = -1;
+    var g = rvGroup();
+    if (g && g.act && g.rows.length) { rv.sel = 0; }
+    var w = document.querySelector("#view-review .b-listwrap");
+    if (w) { w.scrollTop = 0; }
+    rvDraw();
+    if (rv.sel >= 0) { rvEnsureDetail(rv.key, rv.sel); }
+  }
+
+  function rvToggleRow(i) {
+    rv.sel = (rv.sel === i ? -1 : i);
+    rvDrawList();
+    if (rv.sel >= 0) { rvEnsureDetail(rv.key, rv.sel); }
+    rvReveal();
+  }
+
+  function renderReview(res) {
+    rv.job = currentJob || "";
+    rv.name = res.name || "";
+    rv.groups = res.groups || [];
+    rv.byKey = {};
+    rv.detail = {};
+    rv.seen = {};
+    rv.picked = {};
+    rv.base = {};
+    rv.loading = false;
+    rv.groups.forEach(function (g) {
+      rv.byKey[g.key] = g;
+      rvSeed(g);
+    });
+    // 默认打开第一类有内容的；整本干净（五类都是 0）就打开第一类。
+    var first = null;
+    for (var i = 0; i < rv.groups.length; i++) {
+      if (rv.groups[i].num > 0) { first = rv.groups[i]; break; }
+    }
+    if (!first) { first = rv.groups[0] || null; }
+    rv.key = first ? first.key : "";
+    rv.sel = -1;
+    var g = rvGroup();
+    if (g && g.act && g.rows.length) { rv.sel = 0; }
+    var go = el("btn-accept");
+    go.classList.remove("go");
+    go.classList.remove("ready");
+    setView("review");
+    rvDraw();
+    if (rv.sel >= 0) { rvEnsureDetail(rv.key, rv.sel); }
+  }
+
+  function renderMeta(payload) {
+    var meta = payload.meta || {};
+    el("m-title").value = meta.title || "";
+    el("m-author").value = meta.author || "";
+    el("m-lang").value = meta.language || "zh-CN";
+
+    // 这一页的主语是书名和封面，不是统计表。字数是 ② 页那个最大的数字，
+    // 已经看过一遍了；这里只留两个"会不会包错书"的凭据：章级结构对不对、
+    // 原文是什么编码。不带"这次要打包的是"这种起句 —— 一行字据不需要主谓宾。
+    var stats = payload.stats || {};
+    var facts = [];
+    facts.push(num(stats.chapters || 0) + " 章");
+    facts.push(num(stats.paragraphs || 0) + " 段");
+    // 编码只对 TXT 有意义：EPUB 里每个 XHTML 自带编码声明，不存在"猜"这回事，
+    // 显示"原始编码 utf-8"会让人以为我们做了一次探测（其实没做）。
+    if (payload.kind === "epub") {
+      facts.push("来自 EPUB " + ((payload.import || {}).epub_version || ""));
+    } else {
+      facts.push("编码 " + ((payload.encoding || {}).chosen || "—"));
+    }
+    text(el("m-facts"), facts.join(" · "));
+
+    // 输出目录预填成这次会话的产物目录 —— 用户可以改，也可以点「选目录」。
+    // 它收在「更多选项」里，所以 summary 那一行必须带着当前值（syncMoreNote），
+    // 否则"收起来"就变成了"藏起来"。
+    el("m-outdir").value = payload.outdir || "";
+    syncMoreNote();
+
+    // 封面：默认直接出一张自动封面（不是空着）。
+    // 理由：这个界面的目的是做出一本能读的书，空白封面 + 「阅读器会显示书名」
+    // 是个更差的开局 —— 用户还得先点一下才知道封面长什么样。默认给一张，
+    // 不满意再点「换一个」或「不要封面」，比"什么都没选"少一步。
+    // 原书自带封面（EPUB 导入那条路）优先：那本来就是这本书的封面，
+    // 丢掉它才需要理由（试用反馈：「输入 EPUB 时该自动用原始封面」）。
+    coverState.mode = "none";
+    coverState.look = null;
+    coverState.lookKey = "";
+    coverState.seen = [];
+    var hasSource = !!(meta.has_source_cover);
+    el("btn-cover-source").hidden = !hasSource;
+    if (hasSource) {
+      requestSourceCover();
+    } else {
+      requestCoverPreview();
+    }
+    markCoverButtons();
+    el("m-fonts").checked = true;
+    // AZW3 默认不勾：多一道转换就多一份等待，用户没要就不做。
+    el("m-azw3").checked = false;
+
+    setView("meta");
+    // 量字号必须在视图显示之后：display:none 里 clientWidth 是 0，量什么都是 0。
+    fitTitle();
+  }
+
+  // ---------- ④ 封面 ----------
+
+  // 封面状态。2026-10-28 按试用反馈重做：
+  // 原来分"程序化版式"和"用一张画"两条互斥的路，还要用户先理解这个区别。
+  // 这个判断是对的 —— 对使用者来说都是"这本书能长的样子"，分路是我们的实现细节，
+  // 不该漏到界面上。
+  // 现在只有一个队列（后端 cover.all_looks），界面只留四个动作：
+  // 自动生成 / 换一个 / 打开图片 / 不要封面；EPUB 自带封面时多一个「用原书封面」。
+  //
+  // `seen` 记这次会话里给过哪些，让「换一个」优先给没见过的；
+  // 全都看过了后端按队列顺序接着转，不会卡在原地。
+  var coverState = { mode: "none", look: null, lookKey: "", seen: [] };
+
+  // 版式名压在画面下沿（贴着画，不另起一行自报家门）。右下角那个「3 / 45」
+  // 按试用反馈删了：知道一共有 45 种只会让人想去数还剩几种，对选封面没帮助。
+  function coverCap(name) {
+    var cap = el("cover-cap");
+    if (!cap) { return; }
+    el("cover-cap-name").textContent = name || "";
+    cap.hidden = !name;
+  }
+
+  // 临时提示条：只说坏消息（画不出来、读不出原书封面）。好消息不占地方。
+  function coverNote(msg) {
+    var n = el("cover-note");
+    if (!n) { return; }
+    n.textContent = msg || "";
+    n.hidden = !msg;
+  }
+
+  // 「更多选项」收起时，summary 上要能看出成品会落在哪个目录。
+  // 整条路径塞进来会把"更多选项"四个字挤掉，所以只留尾部；
+  // 完整路径放在 title 里，鼠标停一下能看到。
+  function shortDir(dir) {
+    if (!dir) { return ""; }
+    if (dir.length <= 42) { return dir; }
+    // 按分隔符取最后两段：按字符数硬切会切在单词中间（"…\b\backups"）。
+    var parts = dir.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 2) { return dir; }
+    return "…\\" + parts.slice(-2).join("\\");
+  }
+
+  function syncMoreNote() {
+    var note = el("more-note");
+    if (!note) { return; }
+    var dir = el("m-outdir").value.trim();
+    note.textContent = dir ? "输出到 " + shortDir(dir) : "";
+    note.title = dir || "";
+  }
+
+  function showCoverImage(dataUrl) {
+    var frame = el("cover-frame");
+    frame.innerHTML = "";
+    var img = document.createElement("img");
+    img.src = dataUrl;
+    img.alt = "封面预览";
+    frame.appendChild(img);
+  }
+
+  function showCoverEmpty() {
+    var frame = el("cover-frame");
+    frame.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "empty";
+    d.textContent = "无封面\n阅读器会显示书名";
+    frame.appendChild(d);
+  }
+
+  // ④ 页书名改了就重新出一次预览：封面上的字必须跟着改。
+  // 书名只有一个 input，而 input 不换行：长一点的书名在窄窗口会被活活切掉
+  // （实测 720×520：14 个字 → scrollWidth 424，可宽度只有 352）。
+  // 这里不用省略号 —— 书名决定成品文件名，切掉了等于让人看不见自己要做出一本什么书。
+  // 按档降字号：36 是主角的号，24 是还读得清的底线，再长也只能横着滚（有光标可拖）。
+  var TITLE_SIZES = [36, 33, 30, 27, 24];
+  function fitTitle() {
+    var t = el("m-title");
+    if (!t) { return; }
+    t.style.fontSize = "";
+    for (var i = 1; i < TITLE_SIZES.length; i++) {
+      if (t.scrollWidth <= t.clientWidth + 1) { break; }
+      t.style.fontSize = TITLE_SIZES[i] + "px";
+    }
+  }
+
+  // 用 400ms 防抖 —— 每敲一个字就画一张 1200×1600 太浪费。
+  var titlePreviewTimer = null;
+  function scheduleCoverPreview() {
+    if (coverState.mode !== "auto" && coverState.mode !== "source") return;
+    if (titlePreviewTimer) clearTimeout(titlePreviewTimer);
+    titlePreviewTimer = setTimeout(function () {
+      titlePreviewTimer = null;
+      if (coverState.mode === "auto") requestCoverPreview(false);
+      else if (coverState.mode === "source") requestSourceCover();
+    }, 400);
+  }
+  // 书名要先按长度降字号（大字在窄格里会溢出），再重画封面。
+  function onTitleChanged() {
+    fitTitle();
+    scheduleCoverPreview();
+  }
+  // 作者只进封面，不影响字号。
+  function onAuthorChanged() {
+    scheduleCoverPreview();
+  }
+
+  // step=true 是"换一个"，false 是"在当前这张上重画"（改书名/作者触发）。
+  // 两种都要把屏幕上当前那张一起发给后端：不带的话后端只认队列第一项，
+  // 用户换了几个封面再改书名，画面就跳回第一张（试用反馈第 1 条）。
+  function requestCoverPreview(step) {
+    var a = api();
+    var opts = {
+      title: el("m-title").value.trim(),
+      author: el("m-author").value.trim()
+    };
+    if (coverState.look) { opts.look = coverState.look; }
+    if (step) {
+      opts.step = true;
+      opts.current = coverState.lookKey || "";
+      opts.seen = coverState.seen;
+    }
+    var sent = opts;
+    a.preview_cover(currentJob, opts).then(function (res) {
+      if (!res || res.error) {
+        showCoverEmpty();
+        coverCap("");
+        coverNote((res && res.error) || "封面没画出来");
+        return;
+      }
+      coverState.mode = "auto";
+      // 后端没回 look 时留着发出去那份，别把状态清空 —— 下一次重画还要用它。
+      coverState.look = res.look || sent.look || null;
+      coverState.lookKey = res.look_key || "";
+      if (coverState.lookKey && coverState.seen.indexOf(coverState.lookKey) < 0) {
+        coverState.seen.push(coverState.lookKey);
+      }
+      if (res.data_url) { showCoverImage(res.data_url); }
+      coverCap(res.look_name || "");
+      coverNote("");
+      markCoverButtons();
+    }).catch(function (err) {
+      coverNote("封面预览没刷新出来：" + String(err || ""));
+    });
+  }
+
+  function requestSourceCover() {
+    var a = api();
+    a.preview_cover(currentJob, { source: true }).then(function (res) {
+      if (!res || res.error) {
+        showCoverEmpty();
+        coverCap("");
+        coverNote("原书封面读不出来");
+        return;
+      }
+      coverState.mode = "source";
+      coverState.look = null;
+      coverState.lookKey = "";
+      if (res.data_url) { showCoverImage(res.data_url); }
+      coverCap("原书封面");
+      coverNote("");
+      markCoverButtons();
+    });
+  }
+
+  function markCoverButtons() {
+    // 已经有自动封面时，这颗按钮的下一个动作是「换一个」——
+    // 文案跟着变，省得人去猜「再点一次会给我一张一样的吗」。
+    el("btn-cover-auto").textContent =
+      (coverState.mode === "auto" && coverState.lookKey) ? "换一个" : "自动生成";
+    el("btn-cover-auto").classList.toggle("on", coverState.mode === "auto");
+    el("btn-cover-pick").classList.toggle("on", coverState.mode === "image");
+    el("btn-cover-none").classList.toggle("on", coverState.mode === "none");
+    var src = el("btn-cover-source");
+    if (src) src.classList.toggle("on", coverState.mode === "source");
+  }
+
+  // ---------- ⑤ 完成页渲染 ----------
+
+  function renderDone(payload) {
+    // ★ 这一行是这一页所有按钮的命根子：「打开这本书」要 payload.epub、
+    //   「打开所在目录」要 payload.epub || payload.outdir。早先漏了这一行，
+    //   currentPayload 一直是 ② 结果页那份（上面没有 epub 键），于是
+    //   「打开这本书」静默 return、「打开所在目录」打开的是清洗产物目录 ——
+    //   后端辛苦算的 epub/stem/cover 全白给，用户却以为程序没做出书。
+    currentPayload = payload;
+    if (!payload) { showError("没有拿到打包结果", "后端返回了空的结果。", { step: 5, stepName: "完成" }); return; }
+
+    // 书名当大标题，不带扩展名（决定35）：`.epub` 对读者零信息，
+    // 而"这本书叫什么"才是他等了十分钟想确认的东西。
+    // 后端特意分开给了 stem，这里不自己拿 name 去切 —— 书名里本来就可能有点。
+    text(el("d-title"), payload.stem || payload.title || "未命名");
+
+    text(el("d-author"), payload.author || "未署名");
+
+    // 篇幅只说章数。段数在 ③ 页已经删过一次（决定12），跑到最后一页又
+    // 冒出来是同一件事说两遍；字数同理。章数是这本书的骨架，一页说得完。
+    var len = payload.chapters ? (num(payload.chapters) + " 章") : "";
+    text(el("d-length"), len || "—");
+
+    // AZW3：要了才显示。成功说清给了个什么，失败说清"EPUB 已经好了"。
+    var row = el("d-azw3-row");
+    var extra = el("d-azw3");
+    if (payload.azw3) {
+      row.hidden = false;
+      if (payload.azw3.error) {
+        extra.className = "muted";
+        // 失败只报"为什么 + 有没有伤到 EPUB"，不重复三遍"EPUB 已经好了"——
+        // 左边那本书就摆着，说多了是同一种心虚。
+        extra.textContent = payload.azw3.error + "（EPUB 不受影响）";
+      } else {
+        extra.className = "";
+        extra.textContent = payload.azw3.name + "（" +
+          bytes_human(payload.azw3.size_bytes) + "，Kindle 用）";
+      }
+    } else {
+      // 没要 AZW3 就整行不出现。"只要了 EPUB" 是句废话。
+      row.hidden = true;
+    }
+
+    // 封面：这次真打进包里的那一张，不是又一版预览。
+    var frame = el("d-frame");
+    frame.innerHTML = "";
+    if (payload.cover) {
+      var img = document.createElement("img");
+      img.src = payload.cover;
+      img.alt = "这本书的封面";
+      frame.appendChild(img);
+    } else {
+      var d = document.createElement("div");
+      d.className = "empty";
+      d.textContent = "没有封面\n阅读器会显示书名";
+      frame.appendChild(d);
+    }
+
+    // 告警（决定30/31/32）：只用 payload.alerts —— 后端已经按"丢了 / 会跳错 /
+    // 只是难看"分好级、同类合并成一句带计数的话了。这里不再碰 warnings /
+    // problems 原文：那是两条不同来源的流水账，平铺出来就是上一版那面字墙。
+    var box = el("d-alerts");
+    box.innerHTML = "";
+    var alerts = payload.alerts || [];
+    if (alerts.length) {
+      alerts.forEach(function (a) {
+        var row = document.createElement("div");
+        row.className = "done-alert";
+        row.setAttribute("data-lv", a.level || "layout");
+        var p = document.createElement("p");
+        p.textContent = a.text;
+        row.appendChild(p);
+        box.appendChild(row);
+      });
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+    }
+
+    setView("done");
+  }
+
+  // 打包要十几秒（字体子集化那一步最慢），复用处理中那一屏，
+  // 但换个说法：这一步不是在清洗，是在排版与打包。
+  function startBuild() {
+    var a = api();
+    if (!a || !currentJob) { return; }
+    var meta = {
+      title: el("m-title").value.trim(),
+      author: el("m-author").value.trim(),
+      language: el("m-lang").value.trim() || "zh-CN",
+      outdir: el("m-outdir").value.trim(),
+      fonts: el("m-fonts").checked,
+      azw3: el("m-azw3").checked
+    };
+    // 封面模式一起送过去。不给 cover_mode 就是"无封面"——
+    // 打包层据此完全不碰 cover_path 参数（§8.6：不给 build_epub 加新参数）。
+    if (coverState.mode === "auto" && coverState.look) {
+      meta.cover_mode = "auto";
+      // 送整项而不是拆开送 template/theme/background：
+      // 队列里两种形态（版式 / 整幅画）字段不同，拆开送会让后端多一层拼装。
+      meta.cover_look = coverState.look;
+    } else if (coverState.mode === "image") {
+      meta.cover_mode = "image";
+    } else if (coverState.mode === "source") {
+      meta.cover_mode = "source";
+    }
+    stopPolling();
+    // 打包可以从 ③ 也可以从 ④ 发起，取消之后就回发起的那一屏。
+    var back = document.body.getAttribute("data-view") || "result";
+    busyEnter("build", meta.title || metaTitle(), back);
+    a.build_epub(currentJob, meta).then(function (res) {
+      if (!res || !res.job_id) {
+        showError("没能开始打包", (res && res.error) || "后端没有给出任务号。",
+          { step: 4, stepName: "确认书名与封面", back: { view: "meta", label: "回上一步" } });
+        return;
+      }
+      activeJobId = res.job_id;
+      pollBuild(res.job_id);
+    }).catch(function (err) {
+      showError("没能开始打包", "打包这一步没能启动。书名、封面、输出目录都还在。",
+        { step: 4, stepName: "确认书名与封面",
+          detail: String(err), back: { view: "meta", label: "回上一步" } });
+    });
+  }
+
+  function pollBuild(jobId) {
+    var a = api();
+    if (!a) { showError("界面没有连上后端", "pywebview 的桥没有注入成功。",
+      { step: 4, stepName: "确认书名与封面" }); return; }
+    a.job_poll(jobId).then(function (res) {
+      if (jobId !== activeJobId) { return; }
+      if (!res) { showError("后端没有回应", "job_poll 返回了空值。",
+        { step: 4, stepName: "确认书名与封面", back: { view: "meta", label: "回上一步" } }); return; }
+      if (res.error) {
+        // 打包失败是最需要「退回去改改」的那种错：书名、封面、输出目录都在 ④ 页，
+        // 一颗「换一个文件」会把这三样全扔了。
+        showError(res.error_title || "打包失败", res.error, {
+          step: 4,
+          stepName: "确认书名与封面",
+          detail: res.error_detail,
+          back: { view: "meta", label: "回上一步" }
+        });
+        return;
+      }
+      if (res.done) { stopPolling(); renderDone(res.payload); return; }
+      pollTimer = setTimeout(function () { pollBuild(jobId); }, 300);
+    }).catch(function (err) {
+      if (jobId !== activeJobId) { return; }
+      showError("打包时出错", "打包的时候界面和后台失去了一次联系。\n\n退回去再点一次「付梓」就行。",
+        { step: 4, stepName: "确认书名与封面",
+          detail: String(err), back: { view: "meta", label: "回上一步" } });
+    });
+  }
+
+  // ---------- 交互 ----------
+
+  // 整个窗口都是按钮（决定3）。框自己接 click —— 里面不再挂第二份监听，
+  // 所以不会点一次弹两次文件框。
+  el("drop-area").addEventListener("click", function () {
+    var a = api();
+    if (!a) { return; }
+    a.pick_file().then(function (res) {
+      var paths = (res && res.paths) || [];
+      if (paths.length) { startImport(paths[0]); }
+      else if (res && res.error) {
+        showError("打不开文件选择框", res.error, { step: 1, stepName: "拖进一本书" });
+      }
+    }).catch(function (err) {
+      showError("打不开文件选择框", String(err), { step: 1, stepName: "拖进一本书" });
+    });
+  });
+
+  // ---------- 关于 ----------
+  // 这一屏没有按钮，也没有左上角的返回箭头。出口只有两个：Esc、点页面。
+  // 这是用户明知道「看不出来怎么退出」也要换来的干净（决定见交接文档 §9.1）：
+  // 一块牌记上多任何一枚控件，它就变成一张设置页了。
+  // 整页都算「空白处」—— 点印面上也算。规则只有一条，讲一次就懂。
+
+  function openAbout() { setView("about"); }
+
+  function closeAbout() {
+    // 入口只有 ① 首页一处，所以退回哪一屏是确定的，不用记来源。
+    setView("drop");
+  }
+
+  el("btn-about").addEventListener("click", function (e) {
+    // #btn-about 挂在 #view-drop 里面、但不在 #drop-area 里面 —— 后者自己接
+    // click 弹文件选择框。这一行是双保险：将来谁把它挪进去了也不会连弹两次。
+    e.stopPropagation();
+    openAbout();
+  });
+
+  el("view-about").addEventListener("click", closeAbout);
+
+  window.addEventListener("keydown", function (e) {
+    if (document.body.getAttribute("data-view") !== "about") { return; }
+    if (e.key === "Escape" || e.keyCode === 27) { closeAbout(); }
+  });
+
+  // 「换一个文件」/「回上一步」。前者清会话（这次不要了），后者只是退一屏
+  // —— 后者是这一页最后一次改动里最要紧的一处：打包失败的成品还没出来，
+  // 可书名、封面、输出目录都在，退回去就能改，不该把这一场会话扔掉。
+  el("btn-back").addEventListener("click", function () {
+    if (errBack) {
+      setView(errBack.view);
+      return;
+    }
+    currentJob = null;
+    currentPayload = null;
+    setView("drop");
+  });
+
+  el("btn-err-reveal").addEventListener("click", function () {
+    var a = api();
+    if (!a || !errReveal) { return; }
+    a.reveal_in_explorer(errReveal).catch(function () {});
+  });
+
+  // 「仍然继续」：函数由 showError 那一次调用给，没有给就是 hidden，
+  // 所以这里不用再判一次"该不该出现"，按钮自己不会亮。
+  el("btn-err-continue").addEventListener("click", function () {
+    var fn = errContinue;
+    if (fn) { fn(); }
+  });
+
+  // ② 页「复核」：进 ③ 校样页。这一步以前是断的 —— renderReview 有定义、
+  // setView("review") 也只在它内部被调，于是按钮永远没有反应，
+  // 而按钮明明显示着可点。46 处监听里就少了这一根线。
+  el("btn-review").addEventListener("click", function () {
+    var a = api();
+    if (!a || !currentJob) { return; }
+    // 不起处理中那一屏：review() 是同步返回的（清单算一次挂在会话上，
+    // 实测 30ms 量级）。为它闪一屏动画反而像卡了一下。
+    Promise.resolve(a.review(currentJob)).then(function (res) {
+      if (!res || res.error) {
+        showError("打不开复核页", (res && res.error) || "后端没有给出复核数据。",
+          { step: 3, stepName: "复核删改", back: { view: "result", label: "回上一步" } });
+        return;
+      }
+      renderReview(res);
+    }).catch(function (err) {
+      showError("打不开复核页", String(err),
+        { step: 3, stepName: "复核删改", back: { view: "result", label: "回上一步" } });
+    });
+  });
+
+  // ② 页「取消」：这本书不要了。产物已经落盘，先让后端收进回收站再回首页
+  // —— 与 ② 处理中的取消同一个语义：取消 = 这次没发生。
+  // 不 await：收摊是后端的事，界面该立刻回到首页，不该等一个"正在取消"。
+  el("btn-discard").addEventListener("click", function () {
+    var jid = currentJob;
+    currentJob = null;
+    currentPayload = null;
+    var a = api();
+    if (a && jid) { a.discard(jid).catch(function () {}); }
+    setView("drop");
+  });
+
+  // ② 页「打包 EPUB」：进 ④ 元数据页（G2 已接上，这里不再是占位）。
+  el("btn-epub").addEventListener("click", function () {
+    if (!currentPayload) { return; }
+    renderMeta(currentPayload);
+  });
+
+  el("btn-meta-back").addEventListener("click", function () {
+    // 改样之后 currentPayload 已经换成新的一份，回上一页要重画 ③ 页。
+    if (currentPayload) { render(currentPayload); }
+  });
+
+  el("btn-build").addEventListener("click", function () {
+    startBuild();
+  });
+
+  // ---------- 封面按钮 ----------
+  //
+  // 四个动作 + 一个（EPUB 导入才有的）「用原书封面」。
+  // 「换一个」不是状态而是动作，所以它不亮；其余四个各自对应一种模式。
+
+
+  // 「自动生成」第一下：从确定性起点拿一张（同一本书每次打开都是这张）。
+  // 第二下起：**换一个** —— 队列里往后走一格，跳过这次已经看过的。
+  // 这一下以前是断的：requestCoverPreview 从来没被传过 step=true，
+  // 于是 cover.next_look() 永远够不着，「换一个」只是个挂在注释里的概念。
+  // 现在按钮自己会改名，用户不用猜「再点一次会怎样」。
+  el("btn-cover-auto").addEventListener("click", function () {
+    if (!currentJob) { return; }
+    if (coverState.mode === "auto" && coverState.lookKey) {
+      requestCoverPreview(true);   // 换一个：往后走一格
+      return;
+    }
+    // 从头开始：不传 look、不传 current，后端按书名给确定性起点。
+    // （lookKey 只在自动款时非空，走到这里说明屏幕上不是自动封面。）
+    coverState.mode = "auto";
+    coverState.look = null;
+    coverState.lookKey = "";
+    coverState.seen = [];
+    requestCoverPreview();
+  });
+
+  el("btn-cover-pick").addEventListener("click", function () {
+    var a = api();
+    if (!a || !currentJob) { return; }
+    a.pick_cover(currentJob).then(function (res) {
+      if (!res || res.cancelled) { return; }
+      if (res.error) {
+        showError("这张图用不了", res.error,
+          { step: 4, stepName: "确认书名与封面", back: { view: "meta", label: "回上一步" } });
+        return;
+      }
+      coverState.mode = "image";
+      coverState.look = null;
+      coverState.lookKey = "";
+      if (res.data_url) { showCoverImage(res.data_url); }
+      coverCap(res.name || "自己选的图");
+      coverNote("");
+      markCoverButtons();
+    }).catch(function (err) {
+      showError("选图失败", "没能打开图片选择框。",
+        { step: 4, stepName: "确认书名与封面",
+          detail: String(err), back: { view: "meta", label: "回上一步" } });
+    });
+  });
+
+  el("btn-cover-none").addEventListener("click", function () {
+    coverState.mode = "none";
+    coverState.look = null;
+    coverState.lookKey = "";
+    showCoverEmpty();
+    coverCap("");
+    coverNote("");
+    markCoverButtons();
+  });
+
+  // 「用原书封面」只在 EPUB 导入且原包真有封面时显示（renderMeta 里控制 hidden）。
+  el("btn-cover-source").addEventListener("click", function () {
+    if (!currentJob) { return; }
+    requestSourceCover();
+  });
+
+  // ④ 页书名一改，封面上的字跟着改（防抖 400ms）。
+  el("m-title").addEventListener("input", onTitleChanged);
+  el("m-author").addEventListener("input", onAuthorChanged);
+  // 窗口一变窄，原来放得下的书名可能就放不下了，得重新量一次。
+  window.addEventListener("resize", function () {
+    if (document.body.getAttribute("data-view") === "meta") { fitTitle(); }
+  });
+  // 手填输出目录时，收起的 summary 也要跟着变。
+  el("m-outdir").addEventListener("input", syncMoreNote);
+
+  // 输出目录：手填或点「选目录」。取消时 pick_dir 返回 {"path": ""}，保持原值。
+  el("btn-outdir").addEventListener("click", function () {
+    var a = api();
+    if (!a) { return; }
+    a.pick_dir(el("m-outdir").value.trim()).then(function (res) {
+      if (res && res.path) {
+        el("m-outdir").value = res.path;
+        syncMoreNote();
+      }
+    }).catch(function (err) {
+      showError("选目录失败", "没能打开目录选择框。输出目录还是原来那个。",
+        { step: 4, stepName: "确认书名与封面",
+          detail: String(err), back: { view: "meta", label: "回上一步" } });
+    });
+  });
+
+  el("btn-done-open").addEventListener("click", function () {
+    var a = api();
+    if (!a || !currentPayload) { return; }
+    // 完成页打开的是 epub 所在目录，不是清洗产物目录（用户这一刻要的是成品）。
+    var target = currentPayload.epub || currentPayload.outdir;
+    a.reveal_in_explorer(target).then(function (res) {
+      if (res && res.ok === false) {
+        showError("打不开目录", (res.error || "") + "\n\n资源管理器没能起来，书还在盘上。" +
+          "再点一次可能就好了。",
+          { step: 5, stepName: "完成",
+            back: { view: "done", label: "回上一步" }, reveal: target });
+      }
+    }).catch(function (err) {
+      showError("打不开目录", "没能调起资源管理器。",
+        { step: 5, stepName: "完成", detail: String(err),
+          back: { view: "done", label: "回上一步" }, reveal: target });
+    });
+  });
+
+  // 「打开这本书」：这一步唯一的「拿到」动作（决定34）。用系统默认阅读器开成品。
+  // 打不开（没装阅读器、文件被挪走）时**不回首页**：书就在盘上，
+  // 这一页给「回上一步」和「打开所在目录」两个出口 —— 说「左边」是没有的事，
+  // 那一页上根本没有第二个按钮。
+  el("btn-done-read").addEventListener("click", function () {
+    var a = api();
+    if (!a || !currentPayload || !currentPayload.epub) { return; }
+    var file = currentPayload.epub;
+    a.open_file(file).then(function (res) {
+      if (res && res.ok === false) {
+        showError("打不开这本书", (res.error || "") +
+          "\n\n书已经做好了，点下面那行小字就能找到它。", {
+            step: 5, stepName: "完成",
+            back: { view: "done", label: "回上一步" },
+            reveal: file
+          });
+      }
+    }).catch(function (err) {
+      showError("打不开这本书", String(err), {
+        step: 5, stepName: "完成",
+        back: { view: "done", label: "回上一步" },
+        reveal: file
+      });
+    });
+  });
+
+  // 「再来一本」：清干净会话回首页。它是最轻的那个动作（纯文字），
+  // 因为这一页对"再做一本"的答案是"已经做完了"。
+  el("btn-again").addEventListener("click", function () {
+    currentJob = null;
+    currentPayload = null;
+    setView("drop");
+  });
+
+  el("btn-review-back").addEventListener("click", function () {
+    setView(currentPayload ? "result" : "drop");
+  });
+
+  // 目录换类：换过去就把这一类记成"看过"（rvDraw 里做），并把列表滚回顶部。
+  el("b-dir").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button");
+    if (!b || !b.dataset.k) { return; }
+    rvSelect(b.dataset.k);
+  });
+
+  el("b-list").addEventListener("click", function (ev) {
+    if (ev.target.closest(".keep")) { return; }
+    var row = ev.target.closest(".sk-row");
+    if (!row) { return; }
+    rvToggleRow(parseInt(row.dataset.i, 10));
+  });
+
+  // 滚动发生在 .b-listwrap 上（不是 ul），所以要挂在它身上。
+  var rvWrap = document.querySelector("#view-review .b-listwrap");
+  if (rvWrap) { rvWrap.addEventListener("scroll", rvOnScroll); }
+
+  // 校定 = 转场，不是新命令：点下去描边收成实底、旧字上移、
+  // 「装帧」从下面顶上来，翻完自己往下走，不需要再点第二次。
+  el("btn-accept").addEventListener("click", function () {
+    var go = el("btn-accept");
+    if (go.classList.contains("go")) { return; }
+    go.classList.add("go");
+    var adjust = rvAdjust();
+    var dirty = rvDirty();
+    setTimeout(function () {
+      if (!dirty) {
+        // 没改过就不用重跑：几十秒的等待换不来任何变化。
+        renderMeta(currentPayload);
+        return;
+      }
+      var a = api();
+      if (!a || !currentJob) { renderMeta(currentPayload); return; }
+      busyEnter("rerun", rv.name || metaTitle(), "review");
+      Promise.resolve(a.apply_adjust(currentJob, adjust)).then(function (res) {
+        if (!res || !res.job_id) {
+          showError("改样没能开始", (res && res.error) || "后端没有给出任务号。",
+            { step: 3, stepName: "复核删改", back: { view: "review", label: "回上一步" } });
+          return;
+        }
+        // 新 job 的 id 先不写进 currentJob：中途取消的话，复核页还得能按
+        // 原来那个 job 继续用。只有真跑完才换。
+        var fresh = res.job_id;
+        activeJobId = fresh;
+        poll(fresh, function (payload) {
+          currentJob = fresh;
+          currentPayload = payload;
+          renderMeta(payload);
+        });
+      }).catch(function (err) {
+        showError("改样失败", "刚才那几处改动没能重新跑一遍。\n\n你已经改的东西还在这张单子上。",
+          { step: 3, stepName: "复核删改",
+            detail: String(err), back: { view: "review", label: "回上一步" } });
+      });
+    }, 330);
+  });
+
+  el("btn-cancel").addEventListener("click", function () {
+    var jid = activeJobId;
+    activeJobId = null;
+    stopPolling();
+    // 取消 = 这次没发生（决定10）：后端会把这次刚产出的东西收进回收站，
+    // 界面这边立刻退回上一屏 —— 不转圈、不问"确定吗"。退路不该还要审批。
+    var a = api();
+    if (jid && a && a.cancel) {
+      Promise.resolve(a.cancel(jid)).catch(function () {});
+    }
+    var back = busyReturn || "drop";
+    setView(back);
+    if (back === "drop") {
+      currentJob = null;
+      currentPayload = null;
+    }
+  });
+
+  // ---------- 拖放：一团墨跟着手 ----------
+  //
+  // drop 监听由 Python 端用 DOMEventHandler 注册（§3 陷阱 1）：JS 这边拿不到
+  // 绝对路径，dragover 阶段连路径都没有。所以这里只做两件事：
+  // ① 拦住默认行为 —— 没有 preventDefault，WebView2 会直接把窗口导航到被
+  //    拖进来的那个文件上，界面就没了；
+  // ② 按 MIME 分个类，让画面知道这团墨该是暖的还是墨的。
+  //
+  // 分类只看 dataTransfer 给的 MIME：图片 / 音视频 / PDF 一眼就不是书，其余的
+  // （含 MIME 为空）一律当"可能是书"。真正的格式判断在 Python 那边，拖错了它
+  // 会给出准确提示 —— 这里不猜第二遍，也不按扩展名猜（.text / .azw3 连 MIME
+  // 都没有，Windows 注册表里也查不到，见 TODO 第 3 组）。
+  var NOT_BOOK = /^(image|video|audio)\//;
+
+  function isNotBook(types) {
+    for (var i = 0; i < types.length; i++) {
+      var t = types[i];
+      if (NOT_BOOK.test(t) || t === "application/pdf") { return true; }
+    }
+    return false;
+  }
+
+  // 这次拖进来那些文件的类型。items 只在 dragenter / dragover 里读得到；
+  // 读不到就退回 dt.types（那张表里可能混着 "Files" 这种非 MIME 的串）。
+  function kindsOf(dt) {
+    var out = [];
+    if (!dt) { return out; }
+    if (dt.items && dt.items.length) {
+      for (var i = 0; i < dt.items.length; i++) {
+        var it = dt.items[i];
+        if (it && it.kind === "file" && it.type) { out.push(it.type); }
+      }
+    }
+    if (!out.length && dt.types) {
+      for (var j = 0; j < dt.types.length; j++) { out.push(dt.types[j]); }
+    }
+    return out;
+  }
+
+  // 墨心跟手：坐标量成相对 #drop-area 的像素值，写进两个 CSS 变量。
+  //
+  // 这一次拖拽里墨团是否已经就过位。收墨时复位 —— 下次拖进来又要重新就位一次。
+  //
+  // 第一次显形那一帧要特殊处理：平时 --x/--y 是兜底的 50%，那是相对墨团自身
+  // 560px 算的，落在区域左上 280,280 处。要是带着 420ms 的 transform 过渡显形，
+  // 墨团会从那儿一路飘到光标，看着像从别处飞过来。所以首次写坐标时先挂上
+  // bloom-snap 关掉过渡，写完逼一次样式计算让坐标当场就位，再把类摘掉。
+  var bloomSeated = false;
+
+  function placeBloom(ev) {
+    var area = el("drop-area");
+    var box = area.getBoundingClientRect();
+    var first = !bloomSeated;
+    if (first) { area.classList.add("bloom-snap"); }
+    area.style.setProperty("--x", (ev.clientX - box.left) + "px");
+    area.style.setProperty("--y", (ev.clientY - box.top) + "px");
+    if (first) {
+      window.getComputedStyle(area.querySelector(".bloom")).transform;
+      area.classList.remove("bloom-snap");
+      bloomSeated = true;
+    }
+  }
+
+  // state: "" 平时 / "book" 能处理的书 / "other" 明显不是书
+  function setDropState(state) {
+    var area = el("drop-area");
+    if (state) { area.setAttribute("data-drop", state); }
+    else { area.removeAttribute("data-drop"); bloomSeated = false; }
+    document.body.setAttribute("data-drop-active", state ? "1" : "0");
+  }
+
+  ["dragenter", "dragover"].forEach(function (name) {
+    document.addEventListener(name, function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.dataTransfer) { ev.dataTransfer.dropEffect = "copy"; }
+      // 只在首屏吃这一手：拖着文件从别的屏路过时不该冒出一团墨
+      if (document.body.getAttribute("data-view") !== "drop") { return; }
+      setDropState(isNotBook(kindsOf(ev.dataTransfer)) ? "other" : "book");
+      placeBloom(ev);
+    }, false);
+  });
+  ["dragleave", "dragend"].forEach(function (name) {
+    document.addEventListener(name, function (ev) {
+      ev.preventDefault();
+      // 只有真的离开窗口才收墨：在子元素之间移动也会触发 dragleave
+      if (name === "dragleave" && ev.relatedTarget) { return; }
+      setDropState("");
+    }, false);
+  });
+
+  // 松手必须收墨。真实浏览器里 dragleave 不一定补得上：规范说只有"取消拖拽"
+  // 才立刻 fire dragleave，正常松手时它不保证来；dragend 又只派给被拖的那个
+  // 元素 —— 从资源管理器拖过来时那个元素在别的进程里，本页收不到。于是剩下的
+  // 只有 drop 这一条真会发生的事件。
+  //
+  // **只清态，不 preventDefault、不 stopPropagation**：拦默认行为与取绝对路径
+  // 都是 Python 端那个 DOMEventHandler 的活（见 gui/app.py 的 _register_drop），
+  // 这里多拦一手会把它挡掉。拖进来一段网页文字时 Python 侧取不到路径、静默
+  // return，这时就全靠这一行把墨团收回去。
+  document.addEventListener("drop", function () {
+    setDropState("");
+  }, false);
+
+  // Python 端拿到绝对路径后调这个（utils.py 注入的 pywebviewFullPath 只在
+  // 那一侧可见，JS 这里拿不到，只能由 Python 转回来）。
+  window.__onDropPath = function (path) {
+    setDropState("");
+    startImport(path);
+  };
+
+  // ---------- 主题：跟随系统 / 固定深 / 固定浅 ----------
+  //
+  // 三态由 <html data-theme="system|dark|light"> 记，另外用 data-dark="1|0"
+  // 把"当前到底是不是深色"算出来交给 CSS —— CSS 只认 data-dark，
+  // 这样"固定浅色"在系统是深色时也真的浅（只认 media query 做不到）。
+  //
+  // 为什么要存：用户明确要"跟随系统"。跟随系统意味着用户改了系统主题要跟着变，
+  // 而 WebView2 的 matchMedia 不会主动通知我们 —— 靠打开窗口时读一次 + 切换时读一次，
+  // 够用（这个应用不会长时间挂着等主题变化）。
+  // 主题不落盘，只活在这一次运行里。
+  // 原来走 localStorage，但这个窗口是用 html= 注入的，location.origin === "null"，
+  // 任何 localStorage 读写都抛 SecurityError —— 所以 readTheme() 的 catch 永远
+  // 返回 "system"，而 cycleTheme() 每次又从 "system" 算下一个，于是永远只在
+  // 「跟随系统 → 深色」之间跳，浅色那一档代码上不可达（决定1 的 bug）。
+  // 跨启动记忆要等后端开口子（乙案），这轮先用内存。
+  var themeMode = "system";
+  var THEME_ORDER = ["system", "dark", "light"];
+  var THEME_LABEL = { system: "跟随系统", dark: "深色", light: "浅色" };
+
+  function prefersDark() {
+    try {
+      return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    } catch (e) { return false; }
+  }
+
+  function readTheme() { return themeMode; }
+
+  function applyTheme(mode) {
+    var dark = mode === "dark" || (mode === "system" && prefersDark());
+    document.documentElement.setAttribute("data-theme", mode);
+    document.documentElement.setAttribute("data-dark", dark ? "1" : "0");
+    var btn = el("btn-theme");
+    if (btn) {
+      btn.title = "主题：" + THEME_LABEL[mode] + "（点一下换一个）";
+      btn.setAttribute("aria-label", btn.title);
+      // 深色时把太阳换成月亮：图标本身就是当前状态的说明，
+      // 不用再另加一行文字。
+      btn.innerHTML = dark
+        ? '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M13.4 9.6A5.6 5.6 0 0 1 6.4 2.6a5.7 5.7 0 1 0 7 7z"/></svg>'
+        : '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M8 1.6v1.5M8 12.9v1.5M1.6 8h1.5M12.9 8h1.5M3.5 3.5l1 1M11.5 11.5l1 1M12.5 3.5l-1 1M4.5 11.5l-1 1"/><circle cx="8" cy="8" r="2.9"/></svg>';
+    }
+  }
+
+  function cycleTheme() {
+    var i = THEME_ORDER.indexOf(readTheme());
+    themeMode = THEME_ORDER[(i + 1) % THEME_ORDER.length];
+    applyTheme(themeMode);
+  }
+
+  // 系统主题变了（且我们是"跟随系统"）就重算一次。
+  try {
+    if (window.matchMedia) {
+      var mq = window.matchMedia("(prefers-color-scheme: dark)");
+      var onScheme = function () { if (readTheme() === "system") { applyTheme("system"); } };
+      if (mq.addEventListener) { mq.addEventListener("change", onScheme); }
+      else if (mq.addListener) { mq.addListener(onScheme); }
+    }
+  } catch (e) { /* 老 WebView 没有 matchMedia，跟随系统就退化成浅色 */ }
+
+  applyTheme(readTheme());
+  if (el("btn-theme")) { el("btn-theme").addEventListener("click", cycleTheme); }
+
+  window.addEventListener("pywebviewready", function () {
+    bridgeReady = true;
+    var a = api();
+    if (a && a.app_info) {
+      a.app_info().then(function (info) {
+        // 版本号在界面上只出现在一个地方：关于页。决定4 撤掉的是顶栏
+        // 每屏都要挂的那个版本号 —— 「这是什么程序」一辈子问一次，
+        // 问的时候翻到牌记上看，别的时候它不该占版面。
+        if (info && info.version) {
+          var v = el("ab-ver");
+          if (v) { v.textContent = info.version; }
+        }
+        // 没装 Calibre 就把 AZW3 那个选项置灰并说明原因 —— 让人勾了再失败，
+        // 比一开始就说清楚差得多。
+        if (info && info.azw3 === false) {
+          el("m-azw3").disabled = true;
+          el("m-azw3-label").textContent =
+            "同时导出 AZW3（这台机器没装 Calibre，EPUB 不受影响）";
+        }
+      }).catch(function () { /* 版本号拿不到就不显示，不值得为此报错 */ });
+    }
+    if (pendingPath) {
+      var p = pendingPath;
+      pendingPath = null;
+      startImport(p);
+    }
+  }, false);
+})();
+</script>
+</body>
+</html>

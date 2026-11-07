@@ -1,0 +1,26 @@
+# 换行与二进制：让"工作区里是什么字节"不再取决于谁在哪台机器上 clone。
+
+# ---- 文本：一律 LF ----
+# 为什么必须固定：gui/ui.html 是手写的单文件界面，LF 是它的事实标准；仓库此前
+# 靠本机 core.autocrlf=false 兜着，换台机器、换个人（core.autocrlf=true）clone
+# 下来就会变成 CRLF —— 4200 行的差异全在行尾，diff 没法看，也容易带进构建产物。
+*.py            text eol=lf
+*.pyw           text eol=lf
+*.spec          text eol=lf
+*.html          text eol=lf
+*.js            text eol=lf
+*.md            text eol=lf
+*.txt           text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# ---- 脏样本夹具：保持 CRLF ----
+# samples/ 下这两份是「从网上随手下的脏 TXT」的替身，生成时就是 CRLF
+# （tools/gen_sample.py 走 Windows 文本模式写盘）。夹具的价值在于字节固定，
+# 让 checkout 悄悄转成 LF 等于换了个样本，所以这里显式声明回 CRLF。
+samples/messy.txt       text eol=crlf
+samples/report_gbk.md   text eol=crlf
+
+# ---- 二进制：不参与换行转换与 diff 文本化 ----
+*.png   binary
+*.ico   binary
