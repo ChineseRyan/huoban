@@ -1,8 +1,8 @@
 # 活板（huoban）
 
-![木桌上的活字盘、宣纸、墨砚与一方红印](docs/images/hero.jpg)
+把网上下载的脏中文 TXT 小说一键排版成优雅的EPUB文件。
 
-把网上下载的脏中文 TXT 小说，拣字、排版、装订成一本干净的电子书。
+![木桌上的活字盘、宣纸、墨砚与一方红印](docs/images/hero.jpg)
 
 广告行、重复水印、乱掉的编码、断成一句一行的段落，甚至整本糊成一行的文本——活板先按规则拣干净，再把每一处改动摆给你看：**删了哪一行、合并了哪一段、为什么这么判**，都能逐条复核，勾一下就是「这行别删」。不是让 AI 猜着改，是规则跑完你还能自己验收。
 
@@ -63,10 +63,13 @@ MIT 许可证，见 [LICENSE](LICENSE)。
 - 测试逐个脚本直跑（`python tests/test_clean.py` … 看末行 `N/M passed`），别用 pytest；端到端冒烟是 `python tools/smoke_test.py`。
 - 桌面界面的设计说明在 [docs/gui-design.md](docs/gui-design.md)（部分章节以代码为准）。
 
-## 许可证与致谢
+## 许可证
 
 项目本体是 [MIT](LICENSE)：随便用、随便改、随便再发，保留版权声明与许可证原文即可。
 
 - `fonts/` 下两份中文字库不进仓库：思源宋体按 [OFL 1.1](docs/licenses/OFL-NotoSerifCJK.txt)，花园明朝 B 按 [OFL 1.1](docs/licenses/OFL-HanaMinB.txt) 与 [Hanazono Font License](docs/licenses/Hanazono-Font-License.txt) 双许可。它们**不是** MIT；打包时若在场，随发行包带走 `_internal/fonts/` 里的许可证原文。
 - `docs/images/` 的宣传图由 AI 生成，界面截图截自本项目自己的界面，随 MIT 一同发布。
 - 可选依赖：桌面壳 `pywebview`（BSD 三句版）、`fontTools`（MIT）；AZW3 只调用外部 Calibre 的 `ebook-convert`（GPLv3，调进程而非链接代码，不构成派生作品）。`Pillow` 用于画封面。仓库里不含这些依赖的源码。
+
+## 致谢
+- [LINUX DO](https://linux.do) 
