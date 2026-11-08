@@ -679,6 +679,7 @@ def detect_toc(lines: list[str], scan: int = 400, max_gap: int = 4) -> dict:
     }
 
 
+# 为什么：见 docs/notes/no-semantic-judgment.md
 def whole_book_in_one_line(lines: list[str]) -> dict:
     """整本书糊成一个超长行，是"下载时网页没分段"的典型症状。
 

@@ -81,6 +81,7 @@ _EXTB_LO = 0x20000
 _EXTB_HI = 0x2A6DF
 _EXTB_UNICODE_RANGE = f"U+{_EXTB_LO:04X}-{_EXTB_HI:04X}"
 
+# 为什么：见 docs/notes/variable-font-before-static.md
 # 每个角色的候选字体：只列 OFL（思源 / Noto / 花园明朝）系列，顺序即优先级。
 # 前两个是本机实测存在的可变字体（VF = 单个文件含全部字重，实例化到 400）。
 _CANDIDATES: dict[str, tuple[str, ...]] = {

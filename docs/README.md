@@ -7,7 +7,7 @@
 
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
-| [gui-design.md](gui-design.md) | 桌面界面的设计权威：§1 目标与边界 / §2 为什么是 pywebview / §3 三个实现陷阱 / §4 视图 / §5 js_api 方法 / §6 数据契约 / §7 adjust 接口 / §8 封面 / §9 打包运行 / §10 验收 / §11 里程碑 / §12 EPUB 导入 | 要改 `gui/` 下任何东西之前 |
+| [gui-design.md](gui-design.md) | 桌面界面的设计权威 | 要改 `gui/` 下任何东西之前读它 |
 | [release-package.md](release-package.md) | 发试用包的流程：包内 `使用说明.txt` 的模板、打包步骤、发出去之前的三条自查 | 准备发版/打包给别人的时候 |
 | [licenses/](licenses/README.md) | 两个内嵌字体的许可证原文（OFL 1.1 + Hanazono Font License）与来源说明 | 改字体、发版、或有人问「这字库能商用吗」的时候 |
 

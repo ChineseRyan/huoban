@@ -1218,6 +1218,7 @@ def _strip_decor(s: str) -> str:
     return s.strip("".join(_DECOR_PAIRS) + "".join(_DECOR_PAIRS.values()))
 
 
+# 为什么：见 docs/notes/toc-miss-is-not-mismatch.md
 def toc_key(text: str) -> str:
     """把一行标题归一成"目录条目和正文标题能配得上"的键。
 

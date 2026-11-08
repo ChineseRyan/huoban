@@ -743,6 +743,7 @@ def _is_note_box(attrs: dict) -> bool:
     return any(word in _type_words(attrs) for word in _NOTE_WORDS)
 
 
+# 为什么：见 docs/notes/spine-tail-page-pollutes-reflow.md
 def _is_generated_page(items: list[list]) -> bool:
     """这一页是本工具自己加的、不该进正文的页吗？
 

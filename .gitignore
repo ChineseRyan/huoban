@@ -77,4 +77,6 @@ issue/
 # docs/archive/ 是历轮交接与逐屏挑刺的内部过程记录，同理不发布。
 # 忽略不等于删除：文件都还在磁盘上，本地照常可读。
 /TODO.md
+/docs/notes
+/交接-*.md
 /docs/archive/

@@ -1,12 +1,14 @@
 """AZW3 导出：调用外部 Calibre 的 `ebook-convert`，不链接它的任何代码。
 
 ## 为什么是外部命令
+# 为什么：见 docs/notes/azw3-delegates-to-calibre.md
 
 Calibre 是 GPLv3。本项目只**调用**它的可执行文件（用户自己装的），
 不 import、不 vendored、不复制其源码 —— 这是 AGPL/GPL 边界上最干净的做法，
 也是 AGENTS.md「M3 打包」一节原本就定下的方案：AZW3 是**可选依赖**，
 没装 Calibre 就不提供这个能力，EPUB 那条线完全不受影响。
 
+# 为什么：见 docs/notes/azw3-not-byte-reproducible.md
 ## 不可复现，如实说明
 
 EPUB 是逐字节可复现的（同样的书 + 同样的 `modified` → 同样的 sha256，

@@ -3,7 +3,7 @@
 这是 `backups/_archive/20261025/cover_proto/cover_proto.py`（609 行原型，已验证
 54 组确定性 + 对比度全过）搬进 GUI 的版本。搬的时候做了三件事：
 
-1. **Pillow 变成可选依赖**。清洗层与打包层是纯标准库的（AGENTS.md 硬约束），
+1. **Pillow 变成可选依赖**。清洗层与打包层是纯标准库的，
    GUI 侧才允许用 Pillow。这里照 `fonts.py:47-58` 的范式：探测不到就置 None，
    `make_cover()` 返回 None 让调用方回落"无封面"，绝不在 import 期崩掉整个界面。
 2. **可变全局收进 make_cover 的锁里**。原型用模块级 W/H/M/BASE/CUR 传参，
