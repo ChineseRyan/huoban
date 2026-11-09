@@ -80,3 +80,6 @@ issue/
 /docs/notes
 /交接-*.md
 /docs/archive/
+
+# 2026-11-09 补：DSH 工具运行时产物目录（会话临时文件），不入库。
+/.dsh-ops/
