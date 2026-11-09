@@ -363,6 +363,97 @@ def _has_story_word(residual: str) -> bool:
     return any(ch in _STRONG_STORY for ch in residual)
 
 
+# 广告模板里几乎不会出现的字：人称代词、结构助词、语气词。
+# 与 _NARRATIVE / _STRONG_STORY 不同，这张表**刻意不收**"关、说、来、去、走、开"
+# 这些字 —— 它们恰恰是广告模板自己的用字（"关注"的"关"、"小说"的"说"、
+# "内容来自"的"来"），收进来就会把要删的广告自己救下来。
+# 2026-11-09 的用户反馈漏掉的那一行是「关注公众号“某某”（获取更新）」：摘掉
+# 广告词后残留 12 个字，⑥（≤8）先按字数挡下；⑦ 又因为 body_hits 只有 1 个
+# 不算“叠加”而够不着；⑧ 只管带两个链接的长行。三条都走不到，一行明摆着的
+# 广告被留在正文里。这张表只服务于新加的⑨，不参与 ⑥⑦⑧。
+# 注意这里**不收"我、你"**：广告自己也常说"关注我们"（"我们的公众号"）。
+# 收进来只挡得住叙述句里最显眼的那几个代词（他/她/它 + 结构助词），
+# 挡不住"你关注一下"这种祈使句 —— 但那种句子本来就是广告口吻，删了不算错。
+_TEMPLATE_STORY = "他她它您咱的了着过吗呢吧啊呀哦"
+
+# 「引导关注」类广告的动作词与落点。
+# 判据：动作词 + 落点 + 整行没有 _TEMPLATE_STORY 里的字。
+# 第三条是保守阀：真叙述句（"她关注了这个公众号很久"）一定带"她/了"，
+# 广告模板（"关注公众号某某获取更新"）几乎不带。
+_SOLICIT_VERB = (
+    "关注", "扫码", "扫描", "长按", "识别", "添加", "加入", "搜索", "回复", "领取",
+)
+_SOLICIT_PLACE = ("公众号", "微信", "vx", "qq", "群", "企鹅号", "书友", "二维码")
+
+# "的"单独处理：它既出现在广告里（"我们的公众号"），也出现在叙述里
+# （"关注公众号的读者都知道"）。只放过"的 + 落点"这一种组合 ——
+# 中文里"的公众号"几乎只出现在广告套话里，而"关注公众号的读者"这种
+# 定语从句不会紧贴落点。判据里先把这种组合摘掉，再看还剩不剩叙述字。
+_DE_PLACE = re.compile("的(?:" + "|".join(_SOLICIT_PLACE) + ")", re.IGNORECASE)
+
+# 出处水印的称谓。站点喜欢在正文里插一行"内容来自：某某站"，
+# 这类行一个 _STRONG 广告词都不带，只有链接，走不到 ⑤（⑤ 要求有真广告词）。
+_SOURCE_WORDS = (
+    "内容来自", "内容来源", "本文来自", "原文来自", "转载自", "转自", "出处",
+    "来源：", "来源:",
+)
+
+
+def _first_solicit_verb_index(text: str) -> int:
+    """整行里最早出现的一个引导类动作词的位置；一个都没有返回 -1。"""
+    best = -1
+    for verb in _SOLICIT_VERB:
+        i = text.find(verb)
+        if i >= 0 and (best < 0 or i < best):
+            best = i
+    return best
+
+
+def _is_solicit_template(text: str, residual_real: int) -> bool:
+    """整行是不是「引导关注/扫码/加群」的广告模板（见 _SOLICIT_VERB）。
+
+    判据与取舍见 docs/notes/ad-judging-solicit-and-watermark.md。
+    """
+    if len(text) > 40:
+        return False
+    lowered = text.lower()
+    if not any(v in text for v in _SOLICIT_VERB):
+        return False
+    if not any(p in lowered for p in _SOLICIT_PLACE):
+        return False
+    # 动作词前面那一小段是"我 + 开始/经常…"这种主谓起头时，这行是叙述句，
+    # 不是广告模板（"我开始关注微信公众号"）。为什么不能拿 _TEMPLATE_STORY
+    # 看前缀：那张表刻意不收"开、来"，挡不住"我开始…"；这里用 _NARRATIVE，
+    # 并单独认"我"（_NARRATIVE 里也没有它）。
+    lead = text[: _first_solicit_verb_index(text)]
+    if "我" in lead or _has_narrative(lead):
+        return False
+    if any(ch in _TEMPLATE_STORY for ch in _DE_PLACE.sub("", text)):
+        return False
+    return residual_real <= 15
+
+
+def _is_source_watermark(
+    text: str, residual: str, has_url: bool, residual_real: int
+) -> bool:
+    """整行是不是「内容来自：某某站」这类出处水印（见 _SOURCE_WORDS）。
+
+    判据与取舍见 docs/notes/ad-judging-solicit-and-watermark.md。
+
+    要求同时带链接：正文里说"这段转载自某书"是正常叙述，只有带上域名
+    才是站点插进来的水印。
+    """
+    if not has_url or len(text) > 40:
+        return False
+    if not any(w in text for w in _SOURCE_WORDS):
+        return False
+    # 残留里带"他/她/的/了"这类字说明还成句（"他看到了出处 www…"），不能删。
+    # 这里不能用 _NARRATIVE：它收着"来"，会把"内容来自"这个水印自己的字当叙述。
+    if any(ch in _TEMPLATE_STORY for ch in residual):
+        return False
+    return residual_real <= 8
+
+
 def _body_hits(hits: list[str]) -> list[str]:
     """只留真正的广告词，剔掉网址片段。"""
     return [k for k in hits if k not in _URL_HINTS]
@@ -516,7 +607,17 @@ def _judge_whole_line(
         and residual_real <= 60
     ):
         return True
-    # ⑨ 其余一律留着：算行内广告，报告里点名，M4 处理。
+    # ⑨ 引导关注类模板：动作词 + 落点，整行不带叙述句才有的字。
+    #    这一类是"整行都在劝读者关注/扫码/加群"，没有能读的正文。
+    #    以前的几条分支都够不着它：残留 12 个字，⑥ 按字数挡下；body_hits
+    #    只有 1 个，⑦ 不算"叠加"；⑧ 只管带两个链接的长行。
+    if _is_solicit_template(stripped, residual_real):
+        return True
+    # ⑩ 出处水印："内容来自：某某站"这种站点插在正文里的声明。
+    #    它通常一个真广告词都没有，只有域名，④⑤⑥ 都够不着。
+    if _is_source_watermark(stripped, residual, has_url, residual_real):
+        return True
+    # ⑪ 其余一律留着：算行内广告，报告里点名，M4 处理。
     return False
 
 

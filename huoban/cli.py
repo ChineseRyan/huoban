@@ -147,6 +147,7 @@ def _write_epub_output(
     title: str | None = None,
     author: str | None = None,
     cover: str | None = None,
+    back_cover: str | None = None,
     language: str = "zh-CN",
     modified: str | None = None,
     fonts: bool = True,
@@ -173,6 +174,7 @@ def _write_epub_output(
         title=title,
         author=author,
         cover_path=cover,
+        back_cover=back_cover,
         language=language,
         modified=modified,
         fonts=fonts,
@@ -234,7 +236,7 @@ def _print_clean_summary(
     print(
         f"删除  整行广告 {d['ad']} 行 / 目录 {d['toc']} 行"
         + (f" / 段首占位符 {lead} 行" if lead else "")
-        + f" / 压掉空行 {d['extra_blank']} 行",
+        + f" / 压掉空行 {d['extra_blank']} 行（排版用，不算删内容）",
         file=out,
     )
     print(
@@ -457,6 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--author", help="作者（默认从正文最前面几段猜）")
     e.add_argument("--cover", help="封面图路径（jpg/png/gif，不给就生成纯文字封面页）")
     e.add_argument(
+        "--back-cover",
+        help="封底图路径（jpg/png/gif，不给就不生成封底页）",
+    )
+    e.add_argument(
         "--images",
         help=(
             "章节内图片所在目录（reflow 导入的章节树用得上；"
@@ -601,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
                 title=args.title,
                 author=args.author,
                 cover=args.cover,
+                back_cover=args.back_cover,
                 language=args.language,
                 modified=_resolve_modified(args.modified, src),
                 fonts=not args.no_fonts,
@@ -613,6 +620,8 @@ def main(argv: list[str] | None = None) -> int:
             names = (src.name, outpath.name)
             if args.cover:
                 names += (Path(args.cover).name,)
+            if args.back_cover:
+                names += (Path(args.back_cover).name,)
             print(f"打包失败：{_mask_error(exc, names, args.redact)}")
             return 2
         except OSError as exc:

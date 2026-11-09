@@ -109,8 +109,15 @@ def render_clean_markdown(report: dict) -> str:
     # 行内广告：条数记在 fixed 里（它是"改写"不是"删除"），样例另存一桶。
     # 两个数不同源，所以不能拿 len(样例) 当条数（样例会被截断到 8 条）。
     inline_cnt = int(fixed.get("inline_ad_cut_lines") or 0)
-    dropped_total = sum(
-        int(dropped.get(k) or 0) for k in ("ad", "toc", "marker", "extra_blank")
+    # 合计只算真删掉的内容：整行广告、目录行、连载结束标记、段首缩进占位符。
+    # "压掉的空行"是排版用的，不算删内容，所以在表里单列一行、明确不计入合计；
+    # 以前它被算进合计，合计比各行含义对不上，读者会以为正文被删了。
+    lead_cnt = int(fixed.get("lead_marker_lines") or 0)
+    dropped_total = (
+        int(dropped.get("ad") or 0)
+        + int(dropped.get("toc") or 0)
+        + int(dropped.get("marker") or 0)
+        + lead_cnt
     )
 
     parts: list[str] = []
@@ -172,10 +179,11 @@ def render_clean_markdown(report: dict) -> str:
         "book.txt 里每个章节标题前后还会补空行（排版用），文件里的空行会更多。\n"
     )
 
-    # "被压掉的空行"= 输入空行 - 输出空行。它包含两类：连续空行里多余的那几条，
-    # 以及章节标题两侧的分隔空行（那些空行不算删掉内容，排版时 render 层会重新
-    # 按"标题前后各一空行"补回来）。所以标签不能写"多余"，否则每本书都显得
-    # 删掉了一批本来就不该存在的空行。
+    # "被压掉的空行"= 输入空行 - 输出空行。它包含三类：连续空行里多余的那几条，
+    # 章节标题两侧的分隔空行（这两类不算删掉内容，排版时 render 层会重新按
+    # "标题前后各一空行"补回来），以及正文段与段之间的单个空行（0.2.2 起从源头
+    # 折叠：它原本只是排版空行，章节树里不再保留 blank 段，渲染出来也就不会变成
+    # 一段可见间距）。所以标签不能写"多余"，更不能让人以为删掉了正文。
     parts.append("\n## 删除（统计，输入文件本身未被改动）\n")
     parts.append(
         _table(
@@ -189,8 +197,9 @@ def render_clean_markdown(report: dict) -> str:
                 # 段首缩进占位符（???? / !!!!）：网页抓取小说靠它标首行缩进，
                 # 原字符不是给读者看的，所以算"删掉的内容"。放在删除表而不是
                 # 修复表：修复表每一行含义是"改了多少字"，这里一个字都没改。
-                ["段首缩进占位符", fixed.get("lead_marker_lines", 0)],
-                ["被压掉的空行", dropped.get("extra_blank", 0)],
+                ["段首缩进占位符", lead_cnt],
+                # 空行只是排版用的，不计入下面的合计（口径见上面的注释）。
+                ["压掉的空行（排版用，不计入合计）", dropped.get("extra_blank", 0)],
                 ["合计", dropped_total],
             ],
         )

@@ -631,6 +631,8 @@ def case_cover_svg_shell() -> None:
         assert saved.is_file(), sorted(p.name for p in (tmp / "out").iterdir())
         # 封面不算正文插图：不能混进 images_kept 的编号序列
         assert result.report["images_kept"] == 0, result.report["images_kept"]
+        # 没有封底：back_file 与 cover_file 一样是空串，不是 None
+        assert result.report["back_file"] == "", result.report["back_file"]
 
 
 def case_cover_file_empty_without_image_dir() -> None:
@@ -1503,6 +1505,157 @@ def case_back_cover_page_skipped() -> None:
         assert imp.book.front_matter == [], imp.book.front_matter
         # 封底图被真的 <img> 引用了 → 不该报孤儿
         assert imp.report["images_orphan"] == [], imp.report["images_orphan"]
+        # 跳过之前要把封底图捞出来：与封面同一个口径（cover_file），
+        # 报告里给相对 image_dir 的文件名，重新打包时用它原样贴回封底。
+        assert imp.report["back_file"] == "back.png", imp.report["back_file"]
+        saved = tmp / "out" / "back.png"
+        assert saved.is_file(), sorted(p.name for p in (tmp / "out").iterdir())
+        assert saved.read_bytes() == _png(600, 800), "封底图必须逐字节与原图一致"
+
+
+def case_back_cover_guide_fallback() -> None:
+    """封底页没有 <!-- back-cover --> 标记：靠 guide 的 type="back" 兜底捞图。
+
+    别人的包里封底页不一定带我们的标记（标记是自家打包器写的）。页里认不出
+    是不是封底时，guide 的 <reference type="back"> 是唯一能指认它的信号。
+    这条**不改变**整页跳过的判断（没有标记的页照旧按普通"目录里没有的文档"
+    续接进当前章节），只保证报告里 back_file 能指到那张图。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        entries = {
+            "OEBPS/Images/fengdi.png": _png(600, 800),
+            "OEBPS/Text/fengdi.xhtml": XHTML.format(
+                body='<div class="back"><img src="../Images/fengdi.png" alt=""/></div>'
+            ),
+            "OEBPS/Text/c1.xhtml": XHTML.format(body="<h2>第1章 假</h2><p>假正文一。</p>"),
+        }
+        opf = _opf(
+            spine=["c1", "fengdi"],
+            manifest=[
+                ("c1", "Text/c1.xhtml", "application/xhtml+xml", ""),
+                ("fengdi", "Text/fengdi.xhtml", "application/xhtml+xml", ""),
+                ("back-image", "Images/fengdi.png", "image/png", ""),
+                ("ncx", "toc.ncx", "application/x-dtbncx+xml", ""),
+            ],
+            guide='  <guide><reference type="back" title="封底" href="Text/fengdi.xhtml"/></guide>',
+        )
+        entries["OEBPS/content.opf"] = opf
+        entries["OEBPS/toc.ncx"] = _ncx(_navpoint("第1章 假", "Text/c1.xhtml"))
+        imp = read_epub_with_report(_epub(tmp, entries), image_dir=tmp / "out")
+
+        # 没有标记 → 不算"自家生成页"，照旧续接（这是既有行为，别被兜底改掉）
+        assert imp.report["generated_pages"] == 0, imp.report["generated_pages"]
+        assert imp.report["continuation_docs"] == 1, imp.report["continuation_docs"]
+        assert [c.title for c in imp.book.chapters] == ["第1章 假"], [
+            c.title for c in imp.book.chapters
+        ]
+        # 兜底捞图：文件名 back.png，字节与原图一致
+        assert imp.report["back_file"] == "back.png", imp.report["back_file"]
+        saved = tmp / "out" / "back.png"
+        assert saved.is_file(), sorted(p.name for p in (tmp / "out").iterdir())
+        assert saved.read_bytes() == _png(600, 800)
+        # 那张图同时被正文页引用 → 不算孤儿
+        assert imp.report["images_orphan"] == [], imp.report["images_orphan"]
+
+
+def case_back_cover_not_in_spine_not_reported_orphan() -> None:
+    """封底页不在 spine 时，封底图也不许报成孤儿图（复核补修）。
+
+    第一遍统计只走 spine 里的文档。有的包把封底页排除在阅读顺序外，它引用的
+    那张图就一次都数不到，于是同一张图既出现在「封底图已存」又出现在「孤儿
+    图」名单里 —— 报告自相矛盾，用户会以为包里还剩一张没人用的图。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        entries = {
+            "OEBPS/Images/back.png": _png(600, 800),
+            "OEBPS/Text/back.xhtml": XHTML.format(
+                body=(
+                    "<!-- back-cover -->\n"
+                    '<div class="back"><img src="../Images/back.png" alt="封底"/></div>'
+                )
+            ),
+            "OEBPS/Text/c1.xhtml": XHTML.format(body="<h2>第1章 假</h2><p>假正文一。</p>"),
+        }
+        opf = _opf(
+            spine=["c1"],
+            manifest=[
+                ("c1", "Text/c1.xhtml", "application/xhtml+xml", ""),
+                ("back", "Text/back.xhtml", "application/xhtml+xml", ""),
+                ("cover-back", "Images/back.png", "image/png", ""),
+                ("ncx", "toc.ncx", "application/x-dtbncx+xml", ""),
+            ],
+            guide='  <guide><reference type="back" title="封底" href="Text/back.xhtml"/></guide>',
+        )
+        entries["OEBPS/content.opf"] = opf
+        entries["OEBPS/toc.ncx"] = _ncx(_navpoint("第1章 假", "Text/c1.xhtml"))
+        imp = read_epub_with_report(_epub(tmp, entries), image_dir=tmp / "out")
+
+        # guide 的封底页是唯一线索：页不在 spine 里，照样要把图捞出来
+        assert imp.report["back_file"] == "back.png", imp.report["back_file"]
+        assert (tmp / "out" / "back.png").read_bytes() == _png(600, 800)
+        # 捞出来的那张图不许再出现在孤儿名单里
+        assert imp.report["images_orphan"] == [], imp.report["images_orphan"]
+
+
+def case_back_image_substring_does_not_grab_a_body_picture() -> None:
+    """id/href 里撞上 back-image 的正文插图，不许被当成封底拷走（复核补修）。
+
+    兜底扫描以前对 manifest 的 id+href 做 "back-image" 子串匹配，任何叫
+    「回目-back-image-1.png」的正文插图都会被当成封底另存一份 back.png，
+    重新打包时那张封底就会顶替掉真正的封底。现在分两档：id 恰为 back-image
+    的是自家打包器的约定，直接认；只靠子串撞上的，必须是正文一次都没引用过
+    的图。两档都要有用例，否则收紧的判据坏了也没人知道。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        entries = {
+            "OEBPS/Images/back-image-fig.png": _png(300, 400),
+            "OEBPS/Text/c1.xhtml": XHTML.format(
+                body=(
+                    "<h2>第1章 假</h2><p>假正文一。</p>"
+                    '<img src="../Images/back-image-fig.png" alt="插图"/>'
+                )
+            ),
+        }
+        opf = _opf(
+            spine=["c1"],
+            manifest=[
+                ("c1", "Text/c1.xhtml", "application/xhtml+xml", ""),
+                ("body-back-image-1", "Images/back-image-fig.png", "image/png", ""),
+                ("ncx", "toc.ncx", "application/x-dtbncx+xml", ""),
+            ],
+        )
+        entries["OEBPS/content.opf"] = opf
+        entries["OEBPS/toc.ncx"] = _ncx(_navpoint("第1章 假", "Text/c1.xhtml"))
+        imp = read_epub_with_report(_epub(tmp, entries), image_dir=tmp / "out")
+
+        # 这张图在正文里用着 → 不是封底
+        assert imp.report["back_file"] == "", imp.report["back_file"]
+        assert not (tmp / "out" / "back.png").exists(), "正文插图被当成封底拷了一份"
+        assert imp.report["images_kept"] == 1, imp.report["images_kept"]
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # 另一头：id 恰好是 back-image、正文没引用 → 仍要兜底认它
+        entries = {
+            "OEBPS/Images/ye.png": _png(600, 800),
+            "OEBPS/Text/c1.xhtml": XHTML.format(body="<h2>第1章 假</h2><p>假正文一。</p>"),
+        }
+        opf = _opf(
+            spine=["c1"],
+            manifest=[
+                ("c1", "Text/c1.xhtml", "application/xhtml+xml", ""),
+                ("back-image", "Images/ye.png", "image/png", ""),
+                ("ncx", "toc.ncx", "application/x-dtbncx+xml", ""),
+            ],
+        )
+        entries["OEBPS/content.opf"] = opf
+        entries["OEBPS/toc.ncx"] = _ncx(_navpoint("第1章 假", "Text/c1.xhtml"))
+        imp = read_epub_with_report(_epub(tmp, entries), image_dir=tmp / "out")
+        assert imp.report["back_file"] == "back.png", imp.report["back_file"]
+        assert (tmp / "out" / "back.png").read_bytes() == _png(600, 800)
 
 
 def case_back_cover_roundtrip_three_rounds() -> None:
@@ -1539,6 +1692,8 @@ def case_back_cover_roundtrip_three_rounds() -> None:
             assert imp.report["continuation_docs"] == 0, (round_no, imp.report)
             assert imp.report["generated_pages"] == 1, (round_no, imp.report)
             assert imp.report["images_orphan"] == [], (round_no, imp.report)
+            # 封底图每轮都要捞得回来（不然回环一轮少一样东西）
+            assert imp.report["back_file"] == "back.png", (round_no, imp.report)
             book = imp.book
 
 
@@ -1796,6 +1951,9 @@ def main() -> int:
         case_note_leading_backlink_dropped,
         case_generated_info_page_skipped,
         case_back_cover_page_skipped,
+        case_back_cover_guide_fallback,
+        case_back_cover_not_in_spine_not_reported_orphan,
+        case_back_image_substring_does_not_grab_a_body_picture,
         case_back_cover_roundtrip_three_rounds,
         case_spine_non_xhtml_not_silent,
         case_cli_reflow_output_collisions,

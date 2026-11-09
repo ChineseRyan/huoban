@@ -846,6 +846,114 @@ def _tiny_epub(path: Path, *, no_docs: bool = False) -> None:
         )
 
 
+def _book_epub_with_back(path: Path) -> bytes:
+    """造一本"有封底、没内嵌字体"的最小 EPUB，返回封底图的字节。
+
+    封底页照自家产物写：body 里就是 <!-- back-cover --> 标记 + Images/back.png。
+    给"导进来再打出去，封底还在不在"那条端到端用（TODO 0.2.2 第 5 条）。
+    """
+    import zipfile
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" '
+            'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+            '<rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>有封底的书</dc:title><dc:creator>某人</dc:creator></metadata>"
+            '<manifest>'
+            '<item id="c1" href="Text/c1.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="back" href="Text/back.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="back-image" href="Images/back.png" media-type="image/png"/>'
+            "</manifest>"
+            '<spine><itemref idref="c1"/><itemref idref="back"/></spine>'
+            '<guide><reference type="back" title="封底" href="Text/back.xhtml"/></guide>'
+            "</package>",
+        )
+        zf.writestr(
+            "OEBPS/Text/c1.xhtml",
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第一章</title></head>'
+            "<body><h1>第一章</h1><p>正文一段。</p><p>正文二段。</p></body></html>",
+        )
+        zf.writestr(
+            "OEBPS/Text/back.xhtml",
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>封底</title></head>'
+            '<body><!-- back-cover --><div class="back">'
+            '<img src="../Images/back.png" alt=""/></div></body></html>',
+        )
+        zf.writestr("OEBPS/Images/back.png", png)
+    return png
+
+
+def case_epub_roundtrip_keeps_the_original_back_cover():
+    """导进来再打出去，原书封底页/图/样式都还在（TODO 0.2.2 第 5 条验收）。
+
+    旧行为：封底页整页跳过（防"封底续进末章、每导一次多两段"的老设计，别动），
+    但那张图也跟着没了 —— 于是回环一次，产物就永久少一页封底。封底是宣传渠道。
+    """
+    import zipfile
+
+    from huoban.epubread import read_epub_with_report
+
+    root = _tmp_root("back-e2e")
+    src = root / "有封底.epub"
+    png = _book_epub_with_back(src)
+
+    api = Api()
+    import_job = Job(job_id="t-be-import")
+    session = Session(source=src, adjust=None)
+    api._sessions["t-be-import"] = session
+    api._run_import_epub(import_job, session)
+    assert import_job.error == "", import_job.error
+    meta = import_job.payload["meta"]
+    assert meta["has_source_back"] is True, meta
+    assert meta["source_fonts"] == 0, "夹具没有内嵌字体，默认值要跟着它走"
+
+    # 封底页本身仍然整页跳过：正文里不许出现封底那段
+    book = session.result.book
+    before = [p.text for ch in book.chapters for p in ch.paragraphs]
+    assert before == ["正文一段。", "正文二段。"], before
+
+    # 按 ④ 页默认值打包：没选封面（cover_mode 空），字体不嵌 —— 封底仍要贴回去
+    build_job = Job(job_id="t-be-build")
+    api._sessions["t-be-build"] = session
+    api._run_build(build_job, session, {
+        "title": meta["title"], "author": meta.get("author", ""),
+        "language": "zh-CN", "fonts": False, "cover_mode": "",
+    })
+    assert build_job.error == "", build_job.error
+    epub = Path(build_job.payload["epub"])
+    with zipfile.ZipFile(epub) as zf:
+        names = zf.namelist()
+        assert "OEBPS/Text/back.xhtml" in names, names
+        backs = [n for n in names if n.startswith("OEBPS/Images/back.")]
+        assert len(backs) == 1, names
+        assert zf.read(backs[0]) == png, "封底图字节与原书对不上"
+        page = zf.read("OEBPS/Text/back.xhtml").decode("utf-8")
+        css = zf.read("OEBPS/Styles/main.css").decode("utf-8")
+    assert "back-body" in page and "<img" in page, page[:200]
+    assert ".back {" in css, "封底样式没进 main.css"
+
+    # 回环一轮：正文一字不增不减，封底页仍被认成自家生成页（不会续进末章）。
+    # 要给 image_dir —— back_file 只在落图片目录时才有值（与 cover_file 同款语义）。
+    again = read_epub_with_report(epub, image_dir=root / "回环" / "images")
+    assert again.report["generated_pages"] == 1, again.report["generated_pages"]
+    after = [p.text for ch in again.book.chapters for p in ch.paragraphs]
+    assert after == before, f"回环一轮正文变了：{after}"
+    assert again.report["back_file"], "第二轮没认出封底"
+
+
 def case_epub_broken_package_is_input_error():
     """包内损坏必须收成 EpubReadError（review #4 的 M2）。
 
@@ -984,6 +1092,76 @@ def case_zero_byte_file_is_rejected_at_entry():
     )
 
 
+def case_format_gate_comes_before_the_size_gate():
+    """格式闸在大小闸前面（TODO 0.2.2 第 2 条）。
+
+    上一版的顺序是先看大小再看后缀，于是同一个 mp4：大于 50 MB 报「太大」、
+    小于 50 MB 报「格式不支持」。用户换个小一点的再拖一次，得到的是另一句
+    话，还以为是自己文件的问题。格式是「这个格式收不收」，先答它。
+    """
+    import gui.api as api_mod
+
+    root = _tmp_root("gate")
+    job = Job(job_id="t")
+    old = api_mod.MAX_INPUT_BYTES
+    api_mod.MAX_INPUT_BYTES = 100  # 不真造 50 MB 文件：把上限压小，顺序问题一样暴露
+    try:
+        # 同时"超上限"又"格式不收" → 必须报格式，不许提大小
+        p = root / "片子.mp4"
+        p.write_bytes(b"\x00" * 200)
+        try:
+            Api()._run_import(job, Session(source=p, adjust=None))
+        except InputError as exc:
+            msg = str(exc)
+            assert "只接受 TXT 或 EPUB" in msg, msg
+            assert ".mp4" in msg, msg
+            assert "上限" not in msg, f"格式不收的文件不该先报大小：{msg}"
+        else:
+            raise AssertionError("mp4 居然过闸了")
+
+        # 收的格式又超上限 → 仍然报大小（顺序换过头会把这句话吞掉）
+        p = root / "大书.txt"
+        p.write_bytes("第一章 开始\n".encode("utf-8") * 30)
+        try:
+            Api()._run_import(job, Session(source=p, adjust=None))
+        except InputError as exc:
+            assert "上限" in str(exc), str(exc)
+        else:
+            raise AssertionError("超上限的 txt 居然过闸了")
+    finally:
+        api_mod.MAX_INPUT_BYTES = old
+
+
+def case_office_files_get_their_own_wording():
+    """拖来 Word/RTF/WPS/ODT 说「虽为书稿，活板无能为力」（TODO 0.2.2 第 1 条）。
+
+    它们是书稿，不是拖错了文件；笼统的「只接受 TXT 或 EPUB」会让人以为自己
+    点错了东西。普通的"不是书"（mp4/图片）仍然用老文案。
+    """
+    root = _tmp_root("docx")
+    for name in ("书稿.docx", "书稿.doc", "书稿.docm", "书稿.dotm", "书稿.dotx",
+                 "书稿.rtf", "书稿.wps", "书稿.odt", "书稿.pages"):
+        p = root / name
+        p.write_bytes(b"PK\x03\x04not-really")
+        try:
+            Api()._run_import(Job(job_id="t"), Session(source=p, adjust=None))
+        except InputError as exc:
+            msg = str(exc)
+            assert "虽为书稿，活板无能为力" in msg, f"{name} 的文案不对：{msg}"
+            assert p.suffix in msg, f"{name} 的文案没点出后缀：{msg}"
+        else:
+            raise AssertionError(f"{name} 居然过闸了")
+
+    p = root / "照片.png"
+    p.write_bytes(b"\x89PNG\r\n\x1a\n")
+    try:
+        Api()._run_import(Job(job_id="t"), Session(source=p, adjust=None))
+    except InputError as exc:
+        assert str(exc).startswith("只接受 TXT 或 EPUB 文件"), str(exc)
+    else:
+        raise AssertionError("png 居然过闸了")
+
+
 def case_summary_content_state_flags_a_textless_book():
     """清洗完一个字不剩 → content_state=empty，不能让前端自己猜。"""
     from gui.api import _summary
@@ -1049,7 +1227,9 @@ def case_content_state_rules_are_exhaustive():
 # ---------- 2026-10-28 试用反馈：封面书名 / 原书封面 / 输出目录 ----------
 
 
-def _fake_session(tmp: Path, *, source_cover: str | None = None) -> Session:
+def _fake_session(
+    tmp: Path, *, source_cover: str | None = None, source_back: str | None = None
+) -> Session:
     """造一个"清洗已经跑完"的会话，用来直接调 worker 里的函数。"""
     result = clean_text(SAMPLE, source="假书.txt")
     outdir = tmp / "假书_gui"
@@ -1057,6 +1237,8 @@ def _fake_session(tmp: Path, *, source_cover: str | None = None) -> Session:
     session = Session(source=tmp / "假书.txt", result=result, outdir=outdir)
     if source_cover is not None:
         session.extra["source_cover"] = source_cover
+    if source_back is not None:
+        session.extra["source_back_cover"] = source_back
     return session
 
 
@@ -1070,6 +1252,8 @@ def case_book_meta_has_source_cover_default():
     meta = _book_meta(result.book)
     assert "has_source_cover" in meta, sorted(meta)
     assert meta["has_source_cover"] is False, meta["has_source_cover"]
+    # 原书封底同一条规矩：键必须在、缺省 False（TODO 0.2.2 第 5 条）
+    assert meta["has_source_back"] is False, meta["has_source_back"]
 
 
 def case_cover_for_build_uses_edited_title():
@@ -1304,6 +1488,58 @@ def case_back_cover_goes_into_the_package():
         assert "OEBPS/Text/back.xhtml" in names, names
         assert names[-1] == "OEBPS/Text/back.xhtml", "封底页该排在最后一章之后"
         assert any(n.startswith("OEBPS/Images/back.") for n in names), names
+
+
+def case_back_cover_falls_back_to_the_imported_one():
+    """非自动配色时把原书封底贴回去（TODO 0.2.2 第 5 条）。
+
+    原书封底是宣传渠道，导入一次丢一次，等于每回环一轮少一样东西。
+    自选图 / 原书封面这两种"用自己的图"的选择不该硬画一张米白底封底，
+    但原书既然自带封底，就把那张图**原样**贴回去 —— 字节必须一模一样。
+    """
+    from gui import cover as cover_mod
+
+    if not cover_mod.available():
+        print("     skip Pillow 不在，跳过本条（分母照算）")
+        return
+    import tempfile
+    import zipfile
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        png = cover_mod.make_back_cover(cover_mod.first_look("丁书"))
+        src_back = tmp / "原书封底.png"
+        src_back.write_bytes(png)
+        session = _fake_session(tmp, source_back=str(src_back))
+        session.result.book.title = "丁书"
+        api = Api()
+
+        # 1) 不画封底的四种选择 → 都回落原书封底那张
+        for meta in ({"cover_mode": "image"}, {"cover_mode": "source"},
+                     {"cover_mode": ""}, {}):
+            got = api._back_for_build(session, meta)
+            assert got is not None and Path(got) == src_back, (meta, got)
+
+        # 2) auto 仍然现画：原图只做"画不出来时的垫背"，不冒充同款封底
+        drawn = api._back_for_build(session, {"title": "丁书", "cover_mode": "auto"})
+        assert drawn is not None and Path(drawn).name == "back.png", drawn
+        assert Path(drawn).read_bytes() == cover_mod.make_back_cover(
+            cover_mod.first_look("丁书")), "auto 拿原书封底充数了"
+
+        # 3) 端到端：用原书封面模式打包，封底页与图都在，且图字节未变
+        job = Job(job_id="t-src-back")
+        api._sessions["t-src-back"] = session
+        api._run_build(job, session, {
+            "title": "丁书", "author": "某", "language": "zh-CN", "fonts": False,
+            "cover_mode": "source",
+        })
+        assert job.error == "", job.error
+        with zipfile.ZipFile(Path(job.payload["epub"])) as zf:
+            names = zf.namelist()
+            assert "OEBPS/Text/back.xhtml" in names, names
+            backs = [n for n in names if n.startswith("OEBPS/Images/back.")]
+            assert len(backs) == 1, names
+            assert zf.read(backs[0]) == png, "封底图被打包层改过，字节对不上"
 
 
 def case_ui_cover_caption_has_no_queue_position():
@@ -1734,15 +1970,23 @@ def case_ui_drop_classifies_by_mime_only():
     所以判据里出现扩展名、或者出现绿/红那类通用语义，都算走偏。
     """
     src = _ui_source()
-    assert "var NOT_BOOK = /^(image|video|audio)\\//;" in src, "MIME 判据被改掉了"
-    assert 't === "application/pdf"' in src, "PDF 那一支漏了"
+    # 认书白名单的每个成员都在（不钉整行原文：同一个格式在注册表里有好几种
+    # MIME 写法，往表里加成员不该让这条用例变红，删成员才该红）
+    book_rule = src[src.find("var BOOK_MIME"):src.find("var NOT_BOOK ")]
+    for mime in ("text\\/plain", "application\\/epub", "x-mobipocket-ebook"):
+        assert mime in book_rule, "「认得出是书」那支判据少了：" + mime
+    assert "var NOT_BOOK = /^(image|video|audio|font|text)\\//;" in src, "MIME 判据被改掉了"
+    # PDF 从 NOT_BOOK 挪到了 NOT_BOOK_OTHER（2026-11-09 三档分类），仍须判成"不是书"
+    other = src[src.find("var NOT_BOOK_OTHER"):]
+    other = other[:other.find(";")]
+    assert "pdf" in other, "PDF 那一支漏了"
     # 两条"不是书"的路：items 里的真 MIME，以及读不到时的 dt.types 兜底
     assert 'it.kind === "file"' in src, "没读 items 的 kind"
     assert "dt.types" in src, "没留 dt.types 这条兜底"
     # 判据只碰 MIME，不碰扩展名
+    rules = src[src.find("var BOOK_MIME"):src.find("function classifyDrag")]
     for ext in (".txt", ".epub", ".azw3", '".pdf"'):
-        assert ext not in src.split("var NOT_BOOK")[1][:600], \
-            "分类里混进了扩展名判断：" + ext
+        assert ext not in rules, "分类里混进了扩展名判断：" + ext
 
 
 def case_ui_drop_state_is_always_cleared():
@@ -1823,6 +2067,244 @@ def case_ui_drop_first_frame_snaps_into_place():
     # 只在首次挂：后续跟手还得留着那条缓动，否则墨团是硬贴着光标走
     assert body.count('classList.add("bloom-snap")') == 1, \
         "不是首次也会关过渡，跟手就不跟了"
+
+
+def case_ui_drop_office_docs_are_not_books():
+    """办公文档拖进来当场就显示「非书也」，且不许误伤 EPUB（0.2.2 第 1 条）。
+
+    以前 Word/RTF 这类只在 Python 那边按后缀拒，界面上先闪一下「书稿已得」，
+    再翻成错误页 —— 看着像工具先认对后认错。现在办公文档的 MIME 也进
+    「不是书」的判据：纯 MIME，一个扩展名都不写（dragover 阶段拿不到扩展名）。
+    application/epub+zip 不在其中 —— 那恰恰是要收的那种书。
+
+    判据从源码里抽出来，拿真 MIME 逐条试：以前把正则原样抄进测试做文本比对，
+    判据写错了（漏一族、误伤 EPUB）测试照样绿。
+    """
+    src = _ui_source()
+    m = re.search(r"var NOT_BOOK_DOC = /(.+?)/;", src)
+    assert m, "办公文档的 MIME 判据被拿掉了"
+    pattern = m.group(1)
+    assert "epub" not in pattern, "EPUB 被卷进了「不是书」"
+    rx = re.compile(pattern)
+    hits = (
+        "application/msword",                                                        # .doc
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",   # .docx
+        "application/rtf",                                                           # .rtf
+        "application/vnd.oasis.opendocument.text",                                   # .odt
+        "application/vnd.ms-excel",                                                  # .xls
+        "application/vnd.ms-powerpoint",                                             # .ppt
+        "application/kswps",                                                         # .wps（金山）
+        "application/vnd.ms-works",                                                  # .wps（MS Works）
+    )
+    for mime in hits:
+        assert rx.search(mime), "这个办公文档 MIME 没被判成「不是书」：" + mime
+    misses = ("application/epub+zip", "text/plain", "application/zip",
+              "application/pdf", "image/png")
+    for mime in misses:
+        assert not rx.search(mime), "这个不该被卷进「不是书」判据：" + mime
+    body = src[src.find("function classifyDrag"):src.find("function kindsOf")]
+    for piece in ("NOT_BOOK.test(t)", "NOT_BOOK_DOC.test(t)", "NOT_BOOK_OTHER.test(t)"):
+        assert piece in body, "「不是书」的判据没用上：" + piece
+    # 先认书再认不是书：反过来的话 epub（application/epub+zip 与 zip 都不沾）
+    # 这类边界会在以后加规则时悄悄翻面
+    assert body.find("BOOK_MIME.test(t)") >= 0 and \
+        body.find("BOOK_MIME.test(t)") < body.find("NOT_BOOK.test(t)"), \
+        "先判「不是书」再判「是书」了"
+    for ext in (".docx", ".doc", ".rtf", ".wps", ".xlsx", ".pptx"):
+        assert ext not in body, "分类里混进了扩展名判断：" + ext
+    assert "application/epub+zip" not in body, "EPUB 的 MIME 进了「不是书」判据"
+
+
+def case_ui_drop_never_guesses_without_mime():
+    """拿不到真 MIME 时宁可不动：不闪「书稿已得」（0.2.2 第 3 条）。
+
+    dt.types 里常常只剩 "Files" 这种非 MIME 串。以前照单收下当「可能是书」，
+    松手瞬间先亮一句「书稿已得」再翻错误页 —— 一闪而过，用户以为程序先认对
+    后认错。现在 kindsOf 两条路都只收含 "/" 的串；kinds 为空就在
+    dragenter/dragover 里直接返回，不改状态、不摆墨团。
+    """
+    src = _ui_source()
+    kinds = src[src.find("function kindsOf"):src.find("function placeBloom")]
+    assert 'it.type && it.type.indexOf("/") >= 0' in kinds, \
+        "items 里的空 MIME 没滤掉"
+    assert 'typeof t === "string" && t.indexOf("/") >= 0' in kinds, \
+        "dt.types 里的「Files」没滤掉"
+    drag = src[src.find('["dragenter", "dragover"].forEach'):]
+    drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
+    i_kinds = drag.find("var kinds = kindsOf(ev.dataTransfer);")
+    i_guard = drag.find("if (!kinds.length) { return; }")
+    i_set = drag.find("setDropState(cls)")
+    assert i_kinds >= 0 and i_guard >= 0 and i_set >= 0, "拖拽主循环的三步缺了"
+    assert i_kinds < i_guard < i_set, "信息不足时没在改状态之前返回"
+
+
+def case_ui_drag_page_text_is_not_a_book():
+    """拖一段网页里选中的文字，不许再闪「书稿已得」（0.2.2 补修）。
+
+    在浏览器里选中一段文字拖过来，dataTransfer.types 会带 text/plain、
+    text/html、text/uri-list 这几种「不是文件」的 MIME。它们含 "/"，
+    所以以前会被当成「可能是书」，松手瞬间亮一句「书稿已得」，紧接着又翻成
+    错误页 —— 用户看到的是先认对后认错。现在这三种在 dt.types 那条回退路里
+    被排掉；排完是空的就当信息不足，上面原有的「空了就返回」会兜住，不改状态。
+    items 那条路按 kind === "file" 判，选中文字根本不是文件，不必也不该在
+    那里排 MIME。
+    """
+    src = _ui_source()
+    assert 'var TEXT_DRAG = { "text/plain": 1, "text/html": 1, "text/uri-list": 1 };' in src,         "「选中文字」的 MIME 名单被改掉了"
+    kinds = src[src.find("var TEXT_DRAG"):src.find("function placeBloom")]
+    assert "!TEXT_DRAG[t]" in kinds, "dt.types 回退路没排掉选中文字"
+    items = kinds[kinds.find("if (dt.items && dt.items.length)"):
+                  kinds.find("if (!out.length && dt.types)")]
+    assert "TEXT_DRAG" not in items, "items 那条路不该用 MIME 名单兜底（它按 kind 判）"
+    # 排干净之后是空集合，必须仍然走「信息不足不改状态」那条路
+    drag = src[src.find('["dragenter", "dragover"].forEach'):]
+    drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
+    assert drag.find("if (!kinds.length) { return; }") < \
+        drag.find("classifyDrag(kinds)"), "空集合时没在改状态之前返回"
+
+
+def case_ui_drag_exe_and_json_are_not_books():
+    """拖 exe / json 进来也要归「非书也」，同时不能把真书挡在门外（2026-11-09 反馈）。
+
+    以前 isNotBook() 只排图片/音视频/办公文档/PDF，其余一律当"可能是书"，
+    于是 .exe（application/x-msdownload）、.json（application/json）拖进虚框
+    会亮一句「书稿已得」。现在改成三档：认得出是书 → book；认得出不是书 →
+    other；两边都认不出 → 不表态（等松手后由 Python 按扩展名给结论）。
+    这里不重写一支 JS 解释器，只把 ui.html 里那四条正则原文抠出来用 Python
+    的 re 逐条验 MIME 表 —— 判错的风险全在正则上，不在循环上。
+    """
+    import re as pyre
+    src = _ui_source()
+
+    def grab(name: str) -> "pyre.Pattern[str]":
+        i = src.find("var " + name + " = /")
+        assert i >= 0, f"{name} 不见了（用例已失去判断力，先修用例）"
+        line = src[i:src.find(";", i)]
+        body = line[line.find("/") + 1:line.rfind("/")]
+        return pyre.compile(body)
+
+    BOOK_MIME = grab("BOOK_MIME")
+    NOT_BOOK = grab("NOT_BOOK")
+    NOT_BOOK_DOC = grab("NOT_BOOK_DOC")
+    NOT_BOOK_OTHER = grab("NOT_BOOK_OTHER")
+
+    def classify(mime: str) -> str:
+        # 与 classifyDrag 同序：先认书，再认不是书，都不中就空串
+        if BOOK_MIME.search(mime):
+            return "book"
+        if NOT_BOOK.search(mime) or NOT_BOOK_DOC.search(mime) or NOT_BOOK_OTHER.search(mime):
+            return "other"
+        return ""
+
+    # 用户这次反馈的两类：exe 与 json，必须归"不是书"
+    assert classify("application/x-msdownload") == "other", "exe 又被当书了"
+    assert classify("application/json") == "other", "json 又被当书了"
+    # 顺手钉住其余常见"不是书"
+    for mime in ("image/png", "video/mp4", "audio/mpeg", "application/pdf",
+                 "text/html", "text/csv", "application/zip",
+                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
+        assert classify(mime) == "other", f"{mime} 应归「非书也」"
+    # 真书与"认不出"这两头都不能被顺手改了
+    # 真书这一档要收下同一个格式的各种写法：本机注册表里 .epub 报的是
+    # application/epub、.mobi 报 application/mobi，只认规范写法会把真书降成"不表态"
+    for mime in ("text/plain", "application/epub", "application/epub+zip",
+                 "application/mobi", "application/x-mobi8-ebook",
+                 "application/x-mobipocket-ebook", "application/vnd.amazon.ebook"):
+        assert classify(mime) == "book", f"{mime} 应认成书"
+    for mime in ("application/octet-stream", "application/x-unknown-thing"):
+        assert classify(mime) == "", f"{mime} 认不出来时不该表态"
+
+    # 结构：认不出的沉默、认出的才改状态（否则 exe 又会在松手前先亮书稿已得）
+    drag = src[src.find('["dragenter", "dragover"].forEach'):]
+    drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
+    assert "var cls = classifyDrag(kinds);" in drag, "拖拽处理没走三档分类"
+    assert "if (cls) { setDropState(cls); }" in drag, "认不出来时仍在改状态"
+    assert "isNotBook" not in src, "旧的二档 isNotBook 还留着，两套判据会互相打架"
+
+
+def case_ui_font_checkbox_keeps_the_users_choice():
+    """用户手动改过「内嵌字体」之后，重进④页不许把他的勾冲回默认（0.2.2 补修）。
+
+    默认值按导入包来（见 case_ui_font_default_follows_the_imported_package），
+    但 renderMeta 每次重画④页（重进、校定、重跑）都会跑一遍，无条件写默认值
+    就等于把用户的选择抹掉。所以默认值只在「他没动过」时写；换一本书时清回
+    未动的状态，让这本的默认值重新生效。同一本书重跑（forceImport）不清。
+    """
+    src = _ui_source()
+    assert "var fontsTouched = false;" in src, "「用户动过没有」的标记没了"
+    listen = src[src.find('el("m-fonts").addEventListener("change"'):]
+    listen = listen[:listen.find("});")]
+    assert "fontsTouched = true;" in listen, "用户动勾没记下来"
+    meta = src[src.find("function renderMeta"):]
+    meta = meta[:meta.find('setView("meta")')]
+    i_guard = meta.find("if (!fontsTouched) {")
+    i_sf = meta.find("var sf = meta.source_fonts;")
+    assert i_guard >= 0, "默认值又变成无条件写了"
+    assert i_guard < i_sf, "默认值的写入口没被这个标记挡住"
+    start = src[src.find("function startImport(path)"):]
+    start = start[:start.find("function forceImport")]
+    assert "fontsTouched = false;" in start, "换一本书时没让默认值重新生效"
+    i_force = src.find("function forceImport(jobId)")
+    assert i_force >= 0, "forceImport 的签名改了，这条用例已失去判断力（先修用例）"
+    force = src[i_force:]
+    force = force[:force.find("\n  function ")]
+    assert "fontsTouched = false;" not in force, "同一本书重跑把用户的勾清掉了"
+
+
+def case_ui_click_area_is_the_frame_inside():
+    """首屏只有裁切线围出的框能点（0.2.2 第 4 条）。
+
+    以前整个窗口接 click，点哪儿都弹文件选择框，看着像满屏都是按钮。现在挂一个
+    与 .marks 同一尺寸的透明热区 #drop-hot：框里是手型光标、点一下弹框；框外
+    什么都不发生。「关于」按钮在框外，仍是独立按钮；标题字不吃鼠标，点字要落到
+    底下的热区。
+    """
+    src = _ui_source()
+    css = src[:src.find("</style>")]
+
+    def block(sel: str) -> str:
+        start = css.find(sel)
+        assert start >= 0, "样式里找不到 " + sel
+        start += len(sel)
+        return css[start:css.find("}", start)]
+
+    hot = block("#drop-hot {")
+    for piece in ("position: absolute", "inset: 40px", "cursor: pointer"):
+        assert piece in hot, "热区样式少了：" + piece
+    marks = block("#drop-area .marks {")
+    assert "inset: 40px" in marks, ".marks 的裁切线位置变了"
+    assert "inset: 40px" in hot, "热区与裁切线必须同一个 inset，否则「框里能点」名不副实"
+    area = block("#drop-area {")
+    assert "cursor:" not in area, "#drop-area 又整块变手型了（等于满屏可点）"
+    title = block(".drop-title {")
+    assert "pointer-events: none" in title, "标题吃了鼠标，点字弹不出文件框"
+    # 监听只挂热区一份：两份会连弹两次文件框
+    assert 'el("drop-hot").addEventListener("click"' in src, "热区没接 click"
+    assert 'el("drop-area").addEventListener("click"' not in src, \
+        "#drop-area 又接了 click，会连弹两次文件框"
+    # 热区在 DOM 里要排在 .marks 前面：悬停收笔色靠 ~ 兄弟选择器
+    i_hot = src.find('<div id="drop-hot" aria-hidden="true"></div>')
+    i_ripple = src.find('<div class="ripple"')
+    i_marks = src.find('<div class="marks">')
+    assert i_hot >= 0 and i_ripple >= 0 and i_marks >= 0, "首屏的 HTML 结构缺件"
+    assert i_ripple < i_hot < i_marks, "热区的位置不对（悬停规则靠它做兄弟选择）"
+    assert "#drop-hot:hover ~ .marks i" in css, "悬停收笔色没改绑热区"
+
+
+def case_ui_font_default_follows_the_imported_package():
+    """内嵌字体的默认勾选按导入包来（0.2.2 第 5 条③）。
+
+    TXT 那条路没有原书字体，按老规矩默认勾上；EPUB 导入时 meta.source_fonts
+    是数字 —— 包里带了字体（>0）才勾，没带就不勾（勾了只是白打包一份）。
+    用户手改照旧以复选框为准，这里只钉默认值。
+    """
+    src = _ui_source()
+    meta = src[src.find("function renderMeta"):]
+    meta = meta[:meta.find('setView("meta")')]
+    assert "var sf = meta.source_fonts;" in meta, "没读导入包带没带字体"
+    assert 'el("m-fonts").checked = (sf === undefined || sf === null)' in meta, \
+        "字体默认没按包来（TXT 那条路要保留默认勾上）"
+    assert 'el("m-fonts").checked = true;' not in src, "又硬写默认勾上了"
 
 
 # ---------- 第 1 组：整本糊行默认拒收 + 「仍然继续」口子 ----------
@@ -2117,10 +2599,13 @@ _CASES = [
     case_build_keeps_epub_when_book_json_is_locked,
     case_unique_dir_never_reuses_existing,
     case_unique_dir_numbering_is_sequential,
+    case_epub_roundtrip_keeps_the_original_back_cover,
     case_epub_broken_package_is_input_error,
     case_broken_package_message_explains_itself,
     case_epub_failure_leaves_no_stage_dir,
     case_zero_byte_file_is_rejected_at_entry,
+    case_format_gate_comes_before_the_size_gate,
+    case_office_files_get_their_own_wording,
     case_summary_content_state_flags_a_textless_book,
     case_import_summary_separates_images_only_from_empty,
     case_content_state_rules_are_exhaustive,
@@ -2147,6 +2632,14 @@ _CASES = [
     case_ui_drop_state_is_always_cleared,
     case_ui_drop_uses_no_generic_green_red,
     case_ui_drop_first_frame_snaps_into_place,
+    case_ui_drop_office_docs_are_not_books,
+    case_ui_drop_never_guesses_without_mime,
+    case_ui_click_area_is_the_frame_inside,
+    case_ui_font_default_follows_the_imported_package,
+    case_ui_drag_page_text_is_not_a_book,
+    # 用户反馈（2026-11-09）：exe/json 拖进虚框不许亮「书稿已得」
+    case_ui_drag_exe_and_json_are_not_books,
+    case_ui_font_checkbox_keeps_the_users_choice,
     # 第 1 组：糊行默认拒收 + 仍然继续 / 目录残留出口 / 错误页接线
     case_one_line_book_is_rejected_with_a_continue_exit,
     case_force_import_reruns_the_rejected_book,
@@ -2165,6 +2658,7 @@ _CASES = [
     case_preview_cover_keeps_the_look_on_screen,
     case_build_uses_the_look_on_screen,
     case_back_cover_goes_into_the_package,
+    case_back_cover_falls_back_to_the_imported_one,
     case_ui_cover_caption_has_no_queue_position,
     case_ui_cover_redraw_keeps_the_current_look,
 ]

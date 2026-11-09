@@ -310,7 +310,8 @@ def _render_paragraphs(
     2. 段内若含换行（脏中间态：清洗把碎行拼错、或人手改了 JSON），按物理行
        拆成多个元素。绝不能把裸换行塞进 xhtml 文本节点 —— 阅读器会把它折叠成
        一个空格，整段排版就散了。
-    3. 空行折叠：连续多个只出一个 <div class="sep">，章节首尾的空行直接丢。
+    3. 空行折叠：连续多个只出一个 <div class="sep">，章节首尾的空行直接丢；
+       诗词块内部（前后都是 verse）的空行整段吞掉，见下方 "gap" 分支。
        首尾空行在视觉上毫无意义（章标题上下本来就有 margin），留着只会在
        每章开头凭空多出一块空白。
     4. 每行文本 strip：中文小说里的行首空白只可能是排版残留（清洗层归一后的
@@ -408,6 +409,17 @@ def _render_paragraphs(
     while i < len(squeezed):
         kind, text, para = squeezed[i]
         if kind == "gap":
+            # 诗词块内部的空行不额外留白：源文件在诗节之间常插空行，如果
+            # 在这里再叠一个 <div class="sep">，同一块诗里行距就会一段一个样
+            # （2026-11-09 用户反馈：「诗曰」中间空出一行，看着像排版坏了）。
+            # 诗块讲究"每行等距"，所以夹在两段 verse 之间的空行直接吞掉；
+            # 诗与正文之间的空行不受影响，仍是正常的分隔。
+            # 取舍见 docs/notes/verse-block-even-spacing.md。
+            prev_kind = squeezed[i - 1][0] if i > 0 else None
+            next_kind = squeezed[i + 1][0] if i + 1 < len(squeezed) else None
+            if prev_kind == "verse" and next_kind == "verse":
+                i += 1
+                continue
             out.append('<div class="sep"></div>\n')
             i += 1
             continue
@@ -1773,16 +1785,19 @@ _FONT_PROBE_AUTHOR = "作者"
 def _collect_font_chars(book: Book, nav_doc: str, ncx_doc: str, extra_docs) -> set[str]:
     """收集"这本书要显示的所有字符"。
 
-    来源四类：
+    来源五类：
     1. 章节树（章标题 + 卷标题 + 每个段落的 text）；
-    2. 目录两份（nav.xhtml / toc.ncx）—— 里面有书名的每个字；
-    3. 我们自己的页面文案（封面页的书名/作者占位等）；
-    4. 元数据（书名、作者、来源路径）。
+    2. 前言/后记（front_matter / tail_matter）—— 它们不属于任何一章，
+       但打包时照样渲进正文文档；
+    3. 目录两份（nav.xhtml / toc.ncx）—— 里面有书名的每个字；
+    4. 我们自己的页面文案（封面页的书名/作者占位等）；
+    5. 元数据（书名、作者、来源路径）。
 
-    **不要**只收章节树：漏掉第 2、3 类的结果就是"正文是对的，但目录/封面
-    出现方块或字体跳变"，而且这种缺陷只在翻到那一页时才看得见。
+    **不要**只收章节树：漏掉第 3 类，目录页会出现方块；漏掉第 2 类更隐蔽 ——
+    前言/后记里的字逐字退回系统字体，看起来就是"字体跳变"（2026-11-09 反馈）。
+    两种缺陷都只在翻到那一页时才看得见。
 
-    第 4 类里的 source 现在其实不显示在任何页面上（书籍信息页 2026-10-28 已删），
+    第 5 类里的 source 现在其实不显示在任何页面上（书籍信息页 2026-10-28 已删），
     但留着不多花几个字，删它会让所有既有 EPUB 的字节都变 —— 不值得。
     """
     chars: set[str] = set()
@@ -1792,6 +1807,13 @@ def _collect_font_chars(book: Book, nav_doc: str, ncx_doc: str, extra_docs) -> s
         for para in chapter.paragraphs:
             if para.text:
                 chars |= set(para.text)
+    # 前言/后记不在任何一章里，但会照样渲进正文文档（见 _render_chapters
+    # 里前言/后记的两组调用）。漏掉它们的后果不是"方块"而是更隐蔽的字形回退：
+    # 2026-11-09 的用户反馈里，一本带「简介」前言的书写出来之后，前言那几十
+    # 个字在阅读器里换了字体，正是这一处漏收造成的。
+    for para in list(book.front_matter) + list(book.tail_matter):
+        if para.text:
+            chars |= set(para.text)
     if book.title:
         chars |= set(book.title)
     if book.author:

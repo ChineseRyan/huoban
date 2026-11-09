@@ -76,8 +76,11 @@ def case_full() -> None:
     assert "第六章 终局" in out
     assert "第三章 抉择" in out, "警告内容没渲染出来"
     assert "2、7、9" not in out
-    # 删除合计 = 9 + 7 + 5
-    assert "21" in out, "删除合计没算出来"
+    # 删除合计只算真删掉的内容（广告 9 + 目录 7），压掉的空行是排版用、
+    # 单列一行、不计入合计 —— 合计必须等于表里那些"真删"的行之和。
+    assert "| 合计 | 16 |" in out, "删除合计没算出来"
+    assert "| 压掉的空行（排版用，不计入合计） | 5 |" in out, "空行没单列一行"
+    assert "| 合计 | 21 |" not in out, "空行不该再被算进合计"
     # 保留的目录行号
     assert "13" in out
     # 下一步要提到中间态
@@ -153,6 +156,23 @@ def case_pipe_in_cell() -> None:
     for line in out.splitlines():
         if "a\\|b\\|c" in line:
             assert line.count("|") - line.count("\\|") == 5, line
+
+
+def case_delete_total_counts_only_real_deletions() -> None:
+    """删除合计 = 广告 + 目录 + 连载标记 + 段首占位符；压掉的空行不算。
+
+    旧口径把"压掉的空行"也算进合计，于是表里明明写着"排版用，
+    不算删内容"，却仍然被加进合计 —— 账目自相矛盾，读者会以为删了正文。
+    这里四个加数各不相同，任一项漏算或把空行算进来，合计都对不上。
+    """
+    r = _base_report()
+    r["dropped"] = {"ad": 2, "toc": 3, "marker": 1, "extra_blank": 17}
+    r["fixed"]["lead_marker_lines"] = 4
+    out = render_clean_markdown(r)
+    assert "| 合计 | 10 |" in out, out[out.index("## 删除") :][:800]
+    # 空行照实显示，只是不进合计
+    assert "| 压掉的空行（排版用，不计入合计） | 17 |" in out
+    assert "| 合计 | 27 |" not in out, "空行被算进了合计"
 
 
 def case_zeros() -> None:
@@ -473,6 +493,7 @@ _CASES = [
     case_kept_last_toc_line_none,
     case_kept_last_toc_line_zero,
     case_pipe_in_cell,
+    case_delete_total_counts_only_real_deletions,
     case_zeros,
     case_hardwrap_rows_hidden_when_zero,
     case_hardwrap_rows_shown_when_nonzero,

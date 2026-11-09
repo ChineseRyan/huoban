@@ -19,6 +19,7 @@ import io
 import json
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -203,6 +204,32 @@ def case_epub_book_json_ignores_adjust_with_hint() -> None:
     assert "只在清洗那一步生效" in stdout, stdout
 
 
+def case_epub_back_cover_enters_package() -> None:
+    """`--back-cover` 要真透传到打包层：产物里必须有封底页 OEBPS/Text/back.xhtml。
+
+    为什么不能只断言"返回码 0"：参数没接住时打包照样成功，只是悄悄少了这一页
+    （封底图不可用的降级方向就是不产页 + 一条 warning），命令行的输出里看不出
+    区别。只有翻产物里的条目名才能证明这条线是通的。
+    """
+    src = _tmp_text()
+    back = src.parent / "fengdi.png"
+    # 只带文件头与 IHDR 的最小 PNG：打包层只验文件头魔数，够用。
+    back.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\x0dIHDR"
+        + (600).to_bytes(4, "big")
+        + (800).to_bytes(4, "big")
+        + b"\x08\x06\x00\x00\x00"
+    )
+    out = src.parent / "out-back"
+    code, stdout, stderr = _run(["epub", str(src), "--back-cover", str(back), "-o", str(out)])
+    both = stdout + stderr
+    assert code == 0, (code, both)
+    with zipfile.ZipFile(out / "book.epub") as zf:
+        names = zf.namelist()
+    assert "OEBPS/Text/back.xhtml" in names, names
+
+
 def case_bad_adjust_exits_2_on_both_subcommands() -> None:
     """三类"读不进来"的 adjust（坏 JSON / 顶层是 list / 文件不存在）在
     `clean` 与 `epub` 上都必须是**返回码 2 + 一句人话**。
@@ -264,6 +291,7 @@ _CASES = [
     case_clean_adjust_protects_line,
     case_clean_out_of_range_adjust_warns_but_succeeds,
     case_epub_book_json_ignores_adjust_with_hint,
+    case_epub_back_cover_enters_package,
     case_bad_adjust_exits_2_on_both_subcommands,
     case_epub_clean_time_adjust_error_exits_2,
 ]

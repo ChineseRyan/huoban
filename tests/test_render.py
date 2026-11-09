@@ -7,13 +7,13 @@
 覆盖的边界：
 - 正常两章（缩进 / 标题 / 标题前后空行）；
 - 只有 front_matter、只有 tail_matter、空书；
-- blank 段、连续 blank 段、全空白段（都要压成一个空行）；
+- blank 段、连续 blank 段、全空白段（空白段渲成两行空行，连续空行至多两行）；
 - 标题原样保留（含全角空格与半角空格）；
 - heading 段（契约允许）不加缩进；
 - 段落自带行尾空格必须 strip；
 - 幂等且不修改入参；
 - txt_line_count 与实际行数一致；
-- 全书范围的硬约束：开头无空行、无连续空行、行尾无空白、结尾恰好一个换行。
+- 全书范围的硬约束：开头无空行、无连续三个空行、行尾无空白、结尾恰好一个换行。
 """
 
 from __future__ import annotations
@@ -92,6 +92,7 @@ def case_front_matter_only() -> None:
     assert lines == [
         INDENT + "本书由某某整理，仅供试读。",
         "",
+        "",
         INDENT + "他用了一个下午把它录完。",
     ], lines
     assert lines[0].startswith(INDENT), lines[0]
@@ -104,17 +105,17 @@ def case_empty_book() -> None:
 
 
 def case_blank_paragraph() -> None:
-    """单个 blank 段输出一个空行。"""
+    """单个 blank 段输出两行空行（换场景的固定写法）。"""
     book = _book(front=[
         Paragraph(text="甲段"),
         Paragraph(text="", kind="blank"),
         Paragraph(text="乙段"),
     ])
-    assert render_txt(book) == INDENT + "甲段\n\n" + INDENT + "乙段\n", repr(render_txt(book))
+    assert render_txt(book) == INDENT + "甲段\n\n\n" + INDENT + "乙段\n", repr(render_txt(book))
 
 
 def case_consecutive_blanks() -> None:
-    """连续 blank 段（含全空白段）压缩成一个空行。"""
+    """连续 blank 段（含全空白段）最多压到两行空行。"""
     book = _book(front=[
         Paragraph(text="甲段"),
         Paragraph(text="", kind="blank"),
@@ -124,8 +125,43 @@ def case_consecutive_blanks() -> None:
         Paragraph(text="乙段"),
     ])
     text = render_txt(book)
-    assert text == INDENT + "甲段\n\n" + INDENT + "乙段\n", repr(text)
-    assert "\n\n\n" not in text, repr(text)
+    assert text == INDENT + "甲段\n\n\n" + INDENT + "乙段\n", repr(text)
+    assert "\n\n\n\n" not in text, repr(text)
+
+
+def case_title_single_blank_each_side() -> None:
+    """换场景改成两行空行后，章节标题前后仍各只有一个空行。
+
+    为什么不会跟着变两行：标题前后各插一个空行，两章交界处（上一章末尾
+    的空位 + 标题前空行）最多也只有两行，且正文段本身不产出空行；
+    而章节树里章首/章末的 blank 段已被 clean 的 _build_book 弹掉。
+    """
+    book = _book(
+        Chapter(title="第一章 开始", paragraphs=[
+            Paragraph(text="甲段"),
+            Paragraph(text="", kind="blank"),
+            Paragraph(text="乙段"),
+        ]),
+        Chapter(title="第二章 结束", paragraphs=[Paragraph(text="丙段")]),
+    )
+    lines = _lines(render_txt(book))
+    i1 = lines.index("第一章 开始")
+    i2 = lines.index("第二章 结束")
+    # 第一章标题后：恰一个空行，紧接正文
+    assert lines[i1 + 1] == "" and lines[i1 + 2] == INDENT + "甲段", lines
+    # 第二章标题前：恰一个空行，紧接上一章最后一段
+    assert lines[i2 - 1] == "" and lines[i2 - 2] == INDENT + "乙段", lines
+
+
+def case_trailing_blanks_dropped() -> None:
+    """结尾的 blank 段不产出空行：结尾仍恰好一个换行。"""
+    book = _book(front=[
+        Paragraph(text="正文。"),
+        Paragraph(text="", kind="blank"),
+        Paragraph(text="", kind="blank"),
+    ])
+    text = render_txt(book)
+    assert text == INDENT + "正文。\n", repr(text)
 
 
 def case_title_keeps_spaces() -> None:
@@ -254,14 +290,16 @@ def case_line_count() -> None:
         expected = len(render_txt(book).splitlines())
         assert txt_line_count(book) == expected, (expected, txt_line_count(book))
     # 具体值也钉一下，防止两边一起错。第三本手数一遍：
-    #   标题一 / 空 / 甲 / 空 / 乙 / 空 / 标题二 / 空 / 丙 / 完  = 10 行。
+    #   标题一 / 空 / 甲 / 空 / 空 / 乙 / 空 / 标题二 / 空 / 丙 / 完  = 11 行。
+    # （甲乙之间那个 blank 段写两行空行；标题前后仍各一行。）
     # 注意"丙"与"完"之间没有空行：契约只规定标题前后各一空行，
     # 没有规定后记前必须空行，这里就按"少做"处理，不凭空插一行。
     assert txt_line_count(books[1]) == 1, txt_line_count(books[1])
-    assert txt_line_count(books[2]) == 10, txt_line_count(books[2])
+    assert txt_line_count(books[2]) == 11, txt_line_count(books[2])
     assert render_txt(books[2]) == "\n".join([
         "第一章", "",
         INDENT + "甲", "",
+        "",
         INDENT + "乙", "",
         "第二章", "",
         INDENT + "丙",
@@ -270,7 +308,7 @@ def case_line_count() -> None:
 
 
 def case_global_constraints() -> None:
-    """全书硬约束：开头无空行、无连续空行、行尾无空白、结尾恰好一个换行。"""
+    """全书硬约束：开头无空行、无连续三个空行、行尾无空白、结尾恰好一个换行。"""
     book = _book(
         Chapter(title="第一章 空标题测试", paragraphs=[
             Paragraph(text="", kind="blank"),
@@ -291,7 +329,8 @@ def case_global_constraints() -> None:
     assert not text.startswith("\n"), repr(text[:20])
     assert not text.endswith("\n\n"), repr(text[-20:])
     assert text.endswith("\n"), repr(text[-20:])
-    assert "\n\n\n" not in text, repr(text)
+    # 换场景允许两行空行，但不许出现三行及以上
+    assert "\n\n\n\n" not in text, repr(text)
     for line in text.split("\n"):
         assert line == line.rstrip(), f"行尾有空白：{line!r}"
     # 空标题的章不产生标题行，但它的正文照样输出
@@ -305,6 +344,8 @@ def main() -> int:
         case_empty_book,
         case_blank_paragraph,
         case_consecutive_blanks,
+        case_title_single_blank_each_side,
+        case_trailing_blanks_dropped,
         case_title_keeps_spaces,
         case_tail_matter_last,
         case_trailing_space_stripped,

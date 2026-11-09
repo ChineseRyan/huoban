@@ -114,6 +114,7 @@ class _Opf:
     spine: list[str]
     cover_id: str | None
     cover_page_href: str | None  # guide 里 type="cover" 指向的页面
+    back_page_href: str | None   # guide 里 type="back" 指向的封底页
     meta: dict[str, str]
 
 
@@ -314,6 +315,7 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str, warnings: list[str]) -> _Opf:
     title = author = lang = ""
     cover_id = None
     cover_page = None
+    back_page = None
     for el in root.iter():
         name = local(el.tag)
         if name == "item":
@@ -341,8 +343,13 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str, warnings: list[str]) -> _Opf:
             if (el.get("name") or "").lower() == "cover" and value:
                 cover_id = value
         elif name == "reference":
-            if (el.get("type") or "").lower() == "cover" and el.get("href"):
+            rtype = (el.get("type") or "").lower()
+            if rtype == "cover" and el.get("href"):
                 cover_page = el.get("href")
+            elif rtype == "back" and el.get("href"):
+                # 封底页的来源：封底页本身会被整页跳过（见 _is_generated_page），
+                # 这条 href 只在"页面里抠不出图 / 页面缺失"时当兜底。
+                back_page = el.get("href")
         elif name == "title" and not title:
             title = _clean_text("".join(el.itertext()))
         elif name == "creator" and not author:
@@ -366,6 +373,7 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str, warnings: list[str]) -> _Opf:
         spine=spine,
         cover_id=cover_id,
         cover_page_href=cover_page,
+        back_page_href=back_page,
         meta=meta,
     )
 
@@ -755,6 +763,15 @@ def _is_generated_page(items: list[list]) -> bool:
         or (item[0] == "marker" and item[1] == _BACK_COVER_MARK)
         for item in items
     )
+
+
+def _has_back_marker(items: list[list]) -> bool:
+    """这一页是不是带 `<!-- back-cover -->` 标记的封底页？
+
+    单独拆出来是给"跳过之前先把图捞出来"用的：只有封底页有图可捞，
+    文字版信息页没有，不必多读一遍包。
+    """
+    return any(item[0] == "marker" and item[1] == _BACK_COVER_MARK for item in items)
 
 
 class _DocParser(html.parser.HTMLParser):
@@ -1439,6 +1456,11 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
     # "报错了但多了个空文件夹"，用户不知道要不要删。目录建在确定要继续读之后。
     out_dir = Path(image_dir) if image_dir is not None else None
 
+    # guide 里 type="back" 指向的封底页：封底页本身会被整页跳过（见
+    # _is_generated_page），但它的图要在跳过前捞出来。页面缺失或页里抠不出图时，
+    # 这条 href 也是兜底的定位来源。
+    back_page_name = resolve(opf.back_page_href, opf.base) if opf.back_page_href else None
+
     # --- 封面图 ---
     cover_name = ""
     if opf.cover_id:
@@ -1602,6 +1624,8 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
     toc_dropped = 0        # 被当成目录页丢掉的条目数
     continuation_docs = 0  # 目录里没有、续接到当前章节的文档数
     generated_pages = 0    # 自家信息页（打包器写的元数据页），整页跳过
+    back_file = ""         # 封底图落盘文件名（空串 = 没捞到）
+    back_member = ""       # 封底图在 zip 里的条目名（从孤儿图名单里排掉）
     doc_dir = [""]  # 当前文档目录（_emit 闭包用）
 
     def _resolve_ref_local(ref: str) -> str | None:
@@ -1668,6 +1692,44 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
             )
         )
 
+    def _store_back_image(target: str) -> None:
+        """把封底图按 back<ext> 抄进 image_dir。
+
+        命名与正文插图的 img001 序列分开：混在一起会让人以为它也是正文图。
+        撞上已有同名文件（同一目录导过别的书）时加序号后缀，不覆盖。
+        """
+        nonlocal back_file, back_member
+        if back_file or out_dir is None:
+            return
+        try:
+            data = zf.read(target)
+        except KeyError:
+            _warn_once(warnings, f"封底图 {posixpath.basename(target)} 在包里读不出来，已跳过")
+            return
+        ext = _ext_from_magic(data)
+        if ext is None:
+            _warn_once(
+                warnings,
+                f"封底图 {posixpath.basename(target)} 的格式不认识（只支持 jpg/png/gif），已跳过",
+            )
+            return
+        out_name = f"back{ext}"
+        n = 2
+        while (out_dir / out_name).exists():
+            out_name = f"back{n}{ext}"
+            n += 1
+        (out_dir / out_name).write_bytes(data)
+        back_file = out_name
+        back_member = target
+
+    def _save_back_cover(doc: str) -> None:
+        """从封底页里抠出第一张位图落盘（页里没有图就什么也不做）。"""
+        if back_file or out_dir is None:
+            return
+        target = _first_image_in_doc(zf, doc, opf.base, resolve)
+        if target:
+            _store_back_image(target)
+
     def _new_chapter(title: str, level: int, items: list[list]) -> Chapter:
         nonlocal current
         ch = Chapter(title=title, level=level, start_line=0)
@@ -1691,6 +1753,9 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
             if _is_generated_page(items):
                 # 自家信息页（书名/来源/章节数/生成时间）：打包器自己写的元数据，
                 # 不是书的内容。跳过，否则重排一遍就多攒一段"章节数：N"。
+                # 封底页也走这条：跳之前先把封底图捞出来（重新打包要用）。
+                if _has_back_marker(items):
+                    _save_back_cover(name)
                 generated_pages += 1
                 continue
             title = ""
@@ -1719,6 +1784,9 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
             if not nodes:
                 if _is_generated_page(items):
                     # 自家信息页：见上面的说明，整页跳过。
+                    # 封底页也走这条：跳之前先把封底图捞出来（重新打包要用）。
+                    if _has_back_marker(items):
+                        _save_back_cover(name)
                     generated_pages += 1
                     continue
                 # 目录里没有的文档：续接到当前章节（分片续页）或前言。
@@ -1749,6 +1817,35 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
                 chapters_started = True
         if leftover:
             warnings.append(f"目录里有 {len(leftover)} 个条目指向的文档不在 spine 里，已跳过")
+
+    # --- 封底图兜底落盘 ---
+    # 与封面同一个口径（cover_file）：封底页整页跳过、不进正文，但"重新打包时
+    # 想沿用原书封底"需要一个真实文件路径。正常情况下上面的 spine 循环已经把
+    # 封底页里的图捞出来了；走到这里还没捞到，只剩两种情况：
+    # - 封底页里没有 <img>（图挂在 guide 指的另一页上）；
+    # - 封底页根本不在 spine 里（有的包把它排除在阅读顺序外）。
+    # 这两种都用 guide 的 <reference type="back"> 与 manifest 里的 back-image
+    # 条目兜底。整本书没有封底就保持空串。
+    if not back_file and out_dir is not None:
+        if back_page_name:
+            _save_back_cover(back_page_name)
+        if not back_file:
+            for item in opf.items.values():
+                if not item.media.startswith("image/"):
+                    continue
+                target = resolve(item.href, opf.base)
+                if not target:
+                    continue
+                # id 恰好叫 back-image 的是打包器的约定（自家产物就这么写），直接认。
+                # 只靠 id/href 里“撞上” back-image 子串的，必须是正文一次都没引用过的
+                # 图 —— 正文在用的插图不可能同时是封底，否则「回目-back-image-1.png」
+                # 这种命名会把一张正文图误当封底拷走。
+                if item.id.lower() == "back-image":
+                    _store_back_image(target)
+                    break
+                if "back-image" in item.href.lower() and img_refs.get(target, 0) == 0:
+                    _store_back_image(target)
+                    break
 
     # --- 分片合并 ---
     merged, groups, pieces = _merge_pieces(chapters)
@@ -1811,9 +1908,14 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
         "images_kept": len(name_map),
         "images_kept_origin": [posixpath.basename(n) for n in name_map],
         "images_decorative": [posixpath.basename(n) for n in decorative],
-        "images_orphan": [posixpath.basename(n) for n in orphans],
+        # 封底图不算孤儿：它不在正文里，但已经被封底页（或兜底）认领了。
+        # 封底页自己不在 spine 里时，第一遍统计根本不会把它引用计上。
+        "images_orphan": [
+            posixpath.basename(n) for n in orphans if n != back_member
+        ],
         "cover": posixpath.basename(cover_name) if cover_name else None,
         "cover_file": cover_file,
+        "back_file": back_file,
         "fonts": fonts,
         "warnings": warnings,
     }

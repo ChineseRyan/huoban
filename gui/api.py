@@ -53,6 +53,12 @@ TXT_SUFFIXES = {".txt", ".text"}
 EPUB_SUFFIXES = {".epub"}
 INPUT_SUFFIXES = TXT_SUFFIXES | EPUB_SUFFIXES
 
+# 「书稿，但不是活板能读的格式」：Word（含宏文档与模板）、RTF、WPS（金山与
+# MS Works 两套后缀同名）、Apple Pages、ODT。单列一行只为了文案 ——
+# 用户拖进来的是书稿，只是格式不支持；把它说成"不是书"会让人以为拖错了文件
+# （TODO 0.2.2 第 1 条给的文案「虽为书稿，活板无能为力」）。
+DOC_SUFFIXES = {".doc", ".docx", ".docm", ".dotm", ".dotx", ".rtf", ".wps", ".odt", ".pages"}
+
 # 导入 EPUB 时把插图落在这个子目录里（CLI reflow 也叫 images/，§6）。
 IMAGES_DIR = "images"
 
@@ -566,6 +572,9 @@ def _book_meta(book) -> dict:
         # 有没有原书封面决定 ④ 页封面区给不给「用原书封面」这个动作。
         # 由调用方按会话的 extra 覆盖（这里给默认 False，TXT 那条路永远没有）。
         "has_source_cover": False,
+        # 原书封底：非自动配色打包时贴回去的那张图（TODO 0.2.2 第 5 条）。
+        # 同样由调用方覆盖，TXT 那条路永远没有。
+        "has_source_back": False,
     }
 
 
@@ -1432,6 +1441,20 @@ class Api:
             raise InputError(f"文件不存在：{src}")
         if not src.is_file():
             raise InputError(f"这不是一个文件：{src}")
+        # 格式闸放在大小闸前面（TODO 0.2.2 第 2 条）：先回答"这个格式收不收"，
+        # 再回答"这个文件多大"。反过来的话，同一个 mp4 大于 50 MB 报"太大"、
+        # 小于 50 MB 报"格式不支持" —— 用户换个小的再拖一次，得到的是另一句话，
+        # 白试一遍，还以为是自己文件的问题。
+        suffix = src.suffix.lower()
+        if suffix not in INPUT_SUFFIXES:
+            if suffix in DOC_SUFFIXES:
+                # 拖来的是书稿，只是活板读不了 —— 文案说清"无能为力"，
+                # 比笼统的"只接受 TXT 或 EPUB"更贴近用户此刻的处境。
+                raise InputError(
+                    f"虽为书稿，活板无能为力：活板只收 TXT 与 EPUB。"
+                    f"这个是 {src.suffix}，先另存为 TXT 再拖进来。"
+                )
+            raise InputError(f"只接受 TXT 或 EPUB 文件，这个是 {src.suffix or '无后缀'}")
         size = src.stat().st_size
         if size > MAX_INPUT_BYTES:
             raise InputError(
@@ -1443,10 +1466,8 @@ class Api:
         # 而 0 字节是事实，不是猜。
         if size == 0:
             raise InputError("这个文件是空的（0 字节），里面没有正文")
-        if src.suffix.lower() not in INPUT_SUFFIXES:
-            raise InputError(f"只接受 TXT 或 EPUB 文件，这个是 {src.suffix or '无后缀'}")
 
-        if src.suffix.lower() in EPUB_SUFFIXES:
+        if suffix in EPUB_SUFFIXES:
             self._run_import_epub(job, session)
             return
 
@@ -1745,6 +1766,15 @@ class Api:
             str(img_dir / cover_file) if cover_file and (img_dir / cover_file).is_file() else None
         )
 
+        # 原书封底：与封面同一条来路（epubread 报告里的 back_file，2026-11-09 新增）。
+        # 封底页本身仍然整页跳过（防"封底续进末章、每导一次多两段"的老设计，别动），
+        # 只把那张图留下来 —— 回环再打包时由 _back_for_build 原样贴回去。
+        # 封底是宣传渠道，导入一次丢一次等于每回环一轮就少一样东西（TODO 0.2.2 第 5 条）。
+        back_file = str(imp.report.get("back_file") or "").strip()
+        session.extra["source_back_cover"] = (
+            str(img_dir / back_file) if back_file and (img_dir / back_file).is_file() else None
+        )
+
         payload = _import_summary(imp.report, book, outdir=outdir)
         try:
             payload["size_bytes"] = session.source.stat().st_size
@@ -1752,6 +1782,11 @@ class Api:
             payload["size_bytes"] = 0
         payload["meta"] = _book_meta(book)
         payload["meta"]["has_source_cover"] = bool(session.extra.get("source_cover"))
+        payload["meta"]["has_source_back"] = bool(session.extra.get("source_back_cover"))
+        # 源包里内嵌了几套字体：④ 页据此决定「内嵌字体」默认勾不勾 ——
+        # 一本没内嵌字体的书回环再打包，默认不塞字体（用户仍可手动改）。
+        # TXT 那条路没有这个键，界面按老行为（勾上）处理。
+        payload["meta"]["source_fonts"] = int(imp.report.get("fonts") or 0)
         payload["glyphs"] = _book_glyphs(book)
         if job.cancel_requested:
             _recycle(outdir)
@@ -1851,18 +1886,26 @@ class Api:
         三行取值逻辑一字不差地照抄（没有抽公共函数：那边还牵着 title/author
         与三种 mode，抽出来要多传四个参数，反而不如摆在一起对照着看）。
 
-        只在"自动配色"这一支产封底。用户自选图 / 用原书封面这两种情况的封面
-        是他自己的图，我们不知道它的纸纹与底色，硬画一张米白底的封底贴上去，
-        翻开是"别人的封面 + 我们的封底"，比没有封底更难看 —— 所以返回 None，
-        走"这一版不生成封底页"（与老版本产物完全一样）。
+        只有**自动配色**这一支才"画"封底。用户自选图 / 用原书封面这两种情况的
+        封面是他自己的图，我们不知道它的纸纹与底色，硬画一张米白底的封底贴上
+        去，翻开是"别人的封面 + 我们的封底"，比没有封底更难看 —— 所以不画。
 
-        失败一律返回 None：封底是锦上添花，画不出来就不产这一页，
+        但不画 ≠ 丢掉原书封底（2026-11-09 新增，TODO 0.2.2 第 5 条）：本次
+        导入的原书若自带封底，非自动配色时把那张原图**原样贴回去**。封底是
+        宣传渠道，回环一轮丢一次是最不该发生的事。原书没有封底才返回 None，
+        产物与老版本完全一样。
+
+        失败一律退化成 None 或原书封底：封底是锦上添花，画不出来就不产这一页，
         绝不能因为封底把整本书的打包搞砸。
         """
+        # 原书封底：只有 EPUB 导入那条路会有（_run_import_epub 写进 extra）。
+        source_back = session.extra.get("source_back_cover")
+        keep = Path(source_back) if source_back and Path(source_back).is_file() else None
+
         if str(meta.get("cover_mode") or "").strip() != "auto":
-            return None
+            return keep
         if session.outdir is None:
-            return None
+            return keep
 
         title = str(meta.get("title") or "").strip()
         if not title:
@@ -1871,7 +1914,7 @@ class Api:
         from gui import cover as cover_mod
 
         if not cover_mod.available():
-            return None
+            return keep
         look = meta.get("cover_look")
         look = dict(look) if isinstance(look, dict) and look.get("kind") else None
         try:
@@ -1879,14 +1922,14 @@ class Api:
                 look = cover_mod.first_look(title)
             data = cover_mod.make_back_cover(look)
         except Exception:  # noqa: BLE001 - 封底画砸了就不产这一页
-            return None
+            return keep
         if not data:
-            return None
+            return keep
         target = session.outdir / "back.png"
         try:
             target.write_bytes(data)
         except OSError:
-            return None
+            return keep
         return target
 
     # ---------- 前端可调的方法 ----------

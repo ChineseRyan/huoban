@@ -132,8 +132,9 @@
      是每一屏都要交的过路费：它在，内容就矮 52px —— ④ 页为此差 28px，
      把四个封面动作挤出视口。而它回答的问题（这是什么程序）用户只问一次。
      现在只留两样贴角的东西：右上角一枚没有框的日/月（决定5），
-     其余屏左上角一枚「书」印，点它回上一屏（决定23）。
-     首页两样都不要 —— 首页本来就是空的那一屏。
+     每一屏都在（「关于」页除外）；复核页和 ④ 页的左上角各有一枚返回
+     箭头，点它回上一屏（决定23）。首页只留右上角这枚日/月 —— 首页本来
+     就是空的那一屏。
      用 fixed 贴窗口边，不占版面高度；pointer-events 只在子元素上开，
      免得它挡住下面整片拖放区。 */
   .chrome {
@@ -206,8 +207,8 @@
   /* ---------- ① 导入：整窗即拖放区 ---------- */
 
   /* 为什么：见 docs/notes/drop-click-whole-window.md */
-  /* 整个窗口都是落点，也都是按钮（决定3）。框自己接 click，里面不再挂
-     第二份监听，所以不会点一次弹两个文件框。 */
+  /* 整个窗口都是落点；但"按钮"只在四角裁切线围出的框里 —— 热区见 #drop-hot。
+     框自己不再接 click，里面只挂热区这一份监听，所以不会点一次弹两个文件框。 */
   #drop-area {
     flex: 1;
     position: relative;
@@ -217,7 +218,6 @@
     justify-content: center;
     gap: 24px;
     padding: 48px;
-    cursor: pointer;
     /* 墨团要跟着光标跑到纸边上：跑出去就裁掉，别让它在窗外面撑出一截滚动区 */
     overflow: hidden;
   }
@@ -253,7 +253,16 @@
   #drop-area .marks i:nth-child(3) { bottom: 0; left: 0;  border-bottom-width: 1px; border-left-width: 1px; }
   #drop-area .marks i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 1px; border-right-width: 1px; }
 
-  #drop-area:hover .marks i { border-color: var(--ink-3); }
+  /* 点击热区：跟 .marks 同一个 inset:40px —— 裁切线画在哪，可点的框就到哪。
+     全透明，只吃鼠标不吃像素（墨团、涟漪、字都还看得见）；cursor 只在这个框里
+     是手型，框外是普通指针，点了什么都不发生。 */
+  #drop-hot {
+    position: absolute;
+    inset: 40px;
+    cursor: pointer;
+  }
+
+  #drop-hot:hover ~ .marks i { border-color: var(--ink-3); }
 
   /* ---------- 拖放：一团墨跟手 ----------
      拖进来的东西分两类，只按 MIME 判（dragover 阶段 pywebview 不给 JS 路径，
@@ -344,6 +353,8 @@
      （平时态那六个字），所以换态时字宽变了也不会把版面推一下。 */
   .drop-title {
     display: grid;
+    /* 标题只是字，不吃鼠标：点它应当落到底下的热区，弹出文件选择框 */
+    pointer-events: none;
     font-size: 30px;
     letter-spacing: 0.10em;
     font-weight: 400;
@@ -1971,6 +1982,10 @@
       <!-- 墨团：一个跟手走的墨晕 + 一圈荡开的环。都在 .marks 下面、正文上面。 -->
       <div class="bloom" aria-hidden="true"></div>
       <div class="ripple" aria-hidden="true"></div>
+      <!-- 点击热区：裁切线围出的框以内才可点。排在 .marks 前面，用
+           `#drop-hot:hover ~ .marks i` 让框跟着悬停收笔色；字在它上面但不吃
+           鼠标（.drop-title 是 pointer-events:none），点字照样落到热区。 -->
+      <div id="drop-hot" aria-hidden="true"></div>
       <div class="marks"><i></i><i></i><i></i><i></i></div>
       <div class="drop-title">
         <span class="t-idle">把书拖到这里</span>
@@ -1979,8 +1994,8 @@
       </div>
     </div>
   </main>
-  <!-- 关于。★ 必须放在 #drop-area 外面：那个框自己接 click 去弹文件选择框，
-       放在里面点一下会同时触发两件事。 -->
+  <!-- 关于。★ 必须放在 #drop-area 外面：里面的热区 #drop-hot 自己接 click 去
+       弹文件选择框，放在里面点一下会同时触发两件事。 -->
   <button id="btn-about" type="button">关于</button>
 </div>
 
@@ -2273,6 +2288,9 @@
   var pendingPath = null;   // 桥还没好时拖进来的文件先存这儿
   var currentJob = null;
   var currentPayload = null;
+  // 用户在 ④ 页手动动过「内嵌字体」这个勾没有。动过之后 renderMeta 就不再拿
+  // 默认值覆盖他的选择（重进 ④ 页、校定、重跑都会重画这一页）；换一本书时清回 false。
+  var fontsTouched = false;
   var pollTimer = null;
 
   var el = function (id) { return document.getElementById(id); };
@@ -2974,6 +2992,9 @@
 
   function startImport(path) {
     if (!path) { return; }
+    // 新的一本书：忘掉上一次「用户动过字体勾」，默认值按这本来书重算。
+    // 重置会话不用单独清 —— 回首页之后要再进 ④ 页只能靠下一次 startImport。
+    fontsTouched = false;
     var a = api();
     if (!a) {
       // 桥还没注入完：先记下来，等 pywebviewready 再发。丢文件比报错更让人困惑。
@@ -3622,7 +3643,15 @@
       requestCoverPreview();
     }
     markCoverButtons();
-    el("m-fonts").checked = true;
+    // 字体默认：只有原书真的带字体（EPUB 导入时 meta.source_fonts 是数字且 > 0）
+    // 才勾。TXT 那条路没有这个键，按老规矩仍默认勾上；打包照读复选框。
+    // 只在用户没动过这个勾时才写默认值 —— 他改过就听他的：重进 ④ 页、
+    // 校定、重跑都会再走一遍这里，不能把他的选择冲回默认。
+    if (!fontsTouched) {
+      var sf = meta.source_fonts;
+      el("m-fonts").checked = (sf === undefined || sf === null)
+        ? true : (typeof sf === "number" && sf > 0);
+    }
     // AZW3 默认不勾：多一道转换就多一份等待，用户没要就不做。
     el("m-azw3").checked = false;
 
@@ -3963,9 +3992,9 @@
 
   // ---------- 交互 ----------
 
-  // 整个窗口都是按钮（决定3）。框自己接 click —— 里面不再挂第二份监听，
-  // 所以不会点一次弹两次文件框。
-  el("drop-area").addEventListener("click", function () {
+  // 整个窗口都是落点，但可点的只有裁切线围出的那个框（0.2.2 收窄）：监听挂在
+  // 热区 #drop-hot 上，别再挂回 #drop-area —— 两份监听会连弹两次文件框。
+  el("drop-hot").addEventListener("click", function () {
     var a = api();
     if (!a) { return; }
     a.pick_file().then(function (res) {
@@ -4074,6 +4103,12 @@
   el("btn-meta-back").addEventListener("click", function () {
     // 改样之后 currentPayload 已经换成新的一份，回上一页要重画 ③ 页。
     if (currentPayload) { render(currentPayload); }
+  });
+
+  // 「内嵌字体」用户一旦自己动过勾，就以他的为准 —— renderMeta 里那个默认值
+  // 只在他没动过的时候写（见 fontsTouched 的声明处）。
+  el("m-fonts").addEventListener("change", function () {
+    fontsTouched = true;
   });
 
   el("btn-build").addEventListener("click", function () {
@@ -4313,33 +4348,71 @@
   //    拖进来的那个文件上，界面就没了；
   // ② 按 MIME 分个类，让画面知道这团墨该是暖的还是墨的。
   //
-  // 分类只看 dataTransfer 给的 MIME：图片 / 音视频 / PDF 一眼就不是书，其余的
-  // （含 MIME 为空）一律当"可能是书"。真正的格式判断在 Python 那边，拖错了它
-  // 会给出准确提示 —— 这里不猜第二遍，也不按扩展名猜（.text / .azw3 连 MIME
-  // 都没有，Windows 注册表里也查不到，见 TODO 第 3 组）。
-  var NOT_BOOK = /^(image|video|audio)\//;
+  // 分类只看 dataTransfer 给的 MIME，结论分三档 —— 宁可少表态，不可乱表态：
+  //   "book"  ：认出是书（纯文本 / EPUB / MOBI）；
+  //   "other" ：认出明显不是书（图片、音视频、PDF、压缩包、JSON/XML、
+  //             可执行文件、办公文档……）；
+  //   ""      ：两边都认不出（octet-stream、空 MIME、冷门类型），不表态。
+  // 为什么非要中间这一档：Windows 常常报不出 .azw3 自己的类型，只给一个通用
+  // 类型 —— 一律按"不是书"会把真书挡在门外；一律按"可能是书"又会给 exe/json
+  // 亮「书稿已得」（2026-11-09 用户反馈的正是这个）。AZW3 因此落进"不表态"，
+  // 松手后由 Python 按扩展名给出准确提示 —— 这里不猜第二遍。
+  // 取舍见 docs/notes/drop-classification-three-ways.md。
+  // 同一个格式在 Windows 上可能报好几种 MIME：EPUB 常见 application/epub+zip，
+  // 但注册表里也可能是 application/epub；MOBI 可能是 application/mobi 或
+  // application/x-mobipocket-ebook；AZW3 反而常常一个类型都没有，落进中间那档。
+  var BOOK_MIME = /^(text\/plain|text\/text|application\/epub(\+zip)?|application\/mobi|application\/x-mobi8-ebook|application\/x-mobipocket-ebook|application\/vnd\.amazon\.ebook)$/;
+  // 图片 / 音视频 / 字体，以及除纯文本以外的 text/*（网页、CSV、源码……）。
+  var NOT_BOOK = /^(image|video|audio|font|text)\//;
+  // 办公文档：Word（含宏文档、模板）/ RTF / WPS（金山 kswps 与 MS Works
+  // 两套）/ Office 整套 / ODF 整套。只认 MIME，一个扩展名都不写（dragover
+  // 阶段本来就拿不到扩展名）。
+  // 注意 application/epub+zip 不在这里 —— 它恰恰是要收的那种。
+  var NOT_BOOK_DOC = /^application\/(msword|rtf|kswps|vnd\.ms-word|vnd\.ms-works|vnd\.ms-excel|vnd\.ms-powerpoint|vnd\.openxmlformats-officedocument\.|vnd\.oasis\.opendocument\.)/;
+  // 其余一眼不是书的常见类型：PDF、JSON/XML、脚本、各种压缩包、可执行程序。
+  // 可执行只认 application/x-msdownload（.exe）与几个安装包类型，不去枚举
+  // Windows 全部可执行类型 —— 认不出的自然落进中间那档，由 Python 给结论。
+  var NOT_BOOK_OTHER = /^application\/(pdf|json|xml|javascript|ecmascript|x-msdownload|x-msi|x-msdos-program|x-ms-installer|zip|x-zip-compressed|x-rar-compressed|x-7z-compressed|x-gzip|x-tar|x-bzip2|gzip)/;
 
-  function isNotBook(types) {
+  // 一次拖拽可能带好几个文件（还可能混着类型）。只要有一个认得出的书就当书：
+  // Python 那边会逐个报"这个不是书"，这里只回答"该不该亮「书稿已得」"。
+  function classifyDrag(types) {
+    var book = false;
+    var other = false;
     for (var i = 0; i < types.length; i++) {
       var t = types[i];
-      if (NOT_BOOK.test(t) || t === "application/pdf") { return true; }
+      if (BOOK_MIME.test(t)) { book = true; }
+      else if (NOT_BOOK.test(t) || NOT_BOOK_DOC.test(t) || NOT_BOOK_OTHER.test(t)) { other = true; }
     }
-    return false;
+    if (book) { return "book"; }
+    if (other) { return "other"; }
+    return "";
   }
 
   // 这次拖进来那些文件的类型。items 只在 dragenter / dragover 里读得到；
-  // 读不到就退回 dt.types（那张表里可能混着 "Files" 这种非 MIME 的串）。
+  // 读不到就退回 dt.types —— 但那张表里混着两种"不是文件类型"的串：
+  // 一是 "Files" 这种非 MIME 的串，二是拖一段网页里选中的文字时会带的
+  // text/plain、text/html、text/uri-list。所以只收含 "/" 的串、再排掉这三种
+  // "选中文字"的 MIME；过滤完是空的就当"信息不足"（上层不改状态），
+  // 拿它们去分类只能瞎猜（会闪一下「书稿已得」）。
+  var TEXT_DRAG = { "text/plain": 1, "text/html": 1, "text/uri-list": 1 };
+
   function kindsOf(dt) {
     var out = [];
     if (!dt) { return out; }
     if (dt.items && dt.items.length) {
       for (var i = 0; i < dt.items.length; i++) {
         var it = dt.items[i];
-        if (it && it.kind === "file" && it.type) { out.push(it.type); }
+        if (it && it.kind === "file" && it.type && it.type.indexOf("/") >= 0) {
+          out.push(it.type);
+        }
       }
     }
     if (!out.length && dt.types) {
-      for (var j = 0; j < dt.types.length; j++) { out.push(dt.types[j]); }
+      for (var j = 0; j < dt.types.length; j++) {
+        var t = dt.types[j];
+        if (typeof t === "string" && t.indexOf("/") >= 0 && !TEXT_DRAG[t]) { out.push(t); }
+      }
     }
     return out;
   }
@@ -4383,7 +4456,15 @@
       if (ev.dataTransfer) { ev.dataTransfer.dropEffect = "copy"; }
       // 只在首屏吃这一手：拖着文件从别的屏路过时不该冒出一团墨
       if (document.body.getAttribute("data-view") !== "drop") { return; }
-      setDropState(isNotBook(kindsOf(ev.dataTransfer)) ? "other" : "book");
+      var kinds = kindsOf(ev.dataTransfer);
+      // 信息不足就不猜：types 里只剩 "Files" 这种非 MIME 串、或者只是拖了
+      // 一段网页选中文字时 kinds 是空的，这时改状态只会在松手瞬间闪一下
+      // 「书稿已得」。等真有文件 MIME 再表态。
+      if (!kinds.length) { return; }
+      var cls = classifyDrag(kinds);
+      // 认不出的类型不表态（不改状态，只让墨团继续跟手）：等松手后由 Python
+      // 按扩展名给结论，界面上就不会在拖 exe/json 时先亮一句「书稿已得」。
+      if (cls) { setDropState(cls); }
       placeBloom(ev);
     }, false);
   });

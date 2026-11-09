@@ -266,8 +266,11 @@ def case_body_mentioning_ad_word_kept() -> None:
     )
     body = _bodies(res.book.chapters[0])
     # 「」会被 normalize_quotes 统一成“”（这是清洗的既定行为，与本用例无关）
-    assert body == ["他加了她的微信。", "她打开微信。", "“微信联系。”", "关注公众号。"], body
-    assert res.report["dropped"]["ad"] == 0, res.report["dropped"]
+    # 末行"关注公众号。"本身没有任何正文（摘掉"关注/公众号"后不剩字），
+    # 2026-11-09 新增的引导关注判据把它判成整行广告删掉了 —— 那正是这次
+    # 反馈要求的方向；本用例要守的是前三句叙述不能被连带删掉。
+    assert body == ["他加了她的微信。", "她打开微信。", "“微信联系。”"], body
+    assert res.report["dropped"]["ad"] == 1, res.report["dropped"]
 
 
 def case_short_ad_still_removed() -> None:
@@ -292,6 +295,82 @@ def case_ad_keyword_with_exclamation_still_whole() -> None:
     body = _bodies(res.book.chapters[0])
     assert body == ["正文。"], body
     assert res.report["dropped"]["ad"] == 1, res.report["dropped"]
+
+
+def case_solicit_template_line_removed() -> None:
+    """引导关注类模板句整行是广告，要删。
+
+    真实来源（2026-11-09 用户反馈的《西游记》）：书里插着一行
+    "关注公众号“假小说推荐”获取更新。"。旧判据漏掉它有两步：摘掉广告词后
+    残留 12 个字，按残留字数的 ⑥（≤8）够不着；⑦ 要求两个以上广告词叠加，
+    这行只有一个，也够不着。用户看到的是广告没删干净。
+    """
+    res = clean_text(
+        _text(
+            "第一章 开始",
+            "",
+            "关注公众号“某某推荐”（虚构）获取更新。",
+            "扫码关注我们的公众号。",
+            "正文一。",
+        ),
+        source="x",
+    )
+    body = _bodies(res.book.chapters[0])
+    assert body == ["正文一。"], f"引导关注模板句没删干净：{body}"
+    assert res.report["dropped"]["ad"] == 2, res.report["dropped"]
+
+
+def case_source_watermark_line_removed() -> None:
+    """出处水印行（"内容来自：某站"）整行是广告，要删。
+
+    真实来源（2026-11-09 用户反馈的《西游记》）：正文中间插着一行
+    "章节内容来自：book-demo.invalid" —— 一个广告词都没有、只有域名，
+    旧判据 ④⑤⑥ 全够不着，留在了正文里，报告还写"行内夹广告 1 行"。
+    """
+    res = clean_text(
+        _text(
+            "第一章 开始",
+            "",
+            "章节内容来自：book-demo.invalid",
+            "本文来自 www.example-novel.com",
+            "正文一。",
+        ),
+        source="x",
+    )
+    body = _bodies(res.book.chapters[0])
+    assert body == ["正文一。"], f"出处水印没删干净：{body}"
+    assert res.report["dropped"]["ad"] == 2, res.report["dropped"]
+
+
+def case_solicit_words_in_narrative_kept() -> None:
+    """叙述句里出现"关注/公众号"不能当广告删 —— 这个方向的错误丢正文。
+
+    "关注"是常用词（关注伤势、关注动向、多关注两眼）。判据要求同时满足
+    "动作词 + 落点（公众号/微信/群……） + 整行没有 他她您咱/的了着过/吗呢吧"
+    "且残留正文不超过 15 字"，下面每一句都至少缺一条，必须留着。
+
+    后半段几句是第一人称、又不带"的/了"的叙述句（"我关注微信公众号"）：
+    它们只靠"动作词前面还有主语"这一条保命 —— 2026-11-09 的复核实测，
+    没有这条守卫时它们会被⑨整行删掉。带域名的叙述句同理，靠⑩里的
+    "残留带 他/她/的/了 就不删"挡下来。
+    """
+    lines = [
+        "她关注了这个公众号很久。",
+        "关注公众号的读者都知道，作者每天更新。",
+        "我关注了他的公众号。",
+        "他们都说这个公众号不错。",
+        "他加入了微信群，看到大家都在聊。",
+        "这段内容来自作者的手记。",
+        "我开始关注微信公众号",
+        "我关注微信公众号",
+        "我经常关注公众号",
+        "他看到了出处 www.example.com",
+        "她查到了内容来源 www.example.com",
+    ]
+    res = clean_text(_text("第一章 开始", "", *lines), source="x")
+    body = _bodies(res.book.chapters[0])
+    assert body == lines, f"叙述句被误删：{body}"
+    assert res.report["dropped"]["ad"] == 0, res.report["dropped"]
 
 
 def case_ad_samples_have_line_numbers() -> None:
@@ -536,10 +615,89 @@ def case_marker_line_removed() -> None:
 
 
 def case_blank_runs_collapsed() -> None:
-    """连续空行压成 1 行；场景分隔保留。"""
+    """连续空行压成 1 行；正文夹缝里的单空行不产出 blank。
+
+    2026-11 起（0.2.2-⑥）：作者在段落之间只空一行，那只是段间距，
+    不再产出 blank 段；连续空好几行才是场景分隔，压成一个 blank。
+    """
+    res = clean_text(
+        _text("第一章 开始", "", "正文一。", "", "正文二。", "", "", "正文三。"), source="x"
+    )
+    kinds = [p.kind for p in res.book.chapters[0].paragraphs]
+    assert kinds == ["body", "body", "blank", "body"], (
+        f"单空行应折叠、整块空行应只剩 1 个，实际 {kinds}"
+    )
+
+
+def case_double_blank_keeps_exactly_one() -> None:
+    """空行折叠的两面：整块空行留 1 个 blank，单空行一个都不留。
+
+    判别式用例：单空行那半边在 0.2.2-⑥ 之前必失败（旧实现单空行也留 blank）。
+    """
+    # 三个连续空行：场景分隔，恰好留 1 个 blank
     res = clean_text(_text("第一章 开始", "", "正文一。", "", "", "", "正文二。"), source="x")
     kinds = [p.kind for p in res.book.chapters[0].paragraphs]
     assert kinds == ["body", "blank", "body"], f"应为 段落/空/段落，实际 {kinds}"
+    # 单个空行：只是段间距，不产出 blank
+    single = clean_text(_text("第一章 开始", "", "正文一。", "", "正文二。"), source="x")
+    single_kinds = [p.kind for p in single.book.chapters[0].paragraphs]
+    assert single_kinds == ["body", "body"], f"单空行不该留 blank，实际 {single_kinds}"
+
+
+def case_verse_stanza_blank_kept() -> None:
+    """诗节之间的单空行是排版语义，不许当段间距折掉（0.2.2-⑥ 复核补修）。
+
+    判别式用例：折叠若跑在 _mark_verse 之前（或不分诗词），「低头思故乡。」
+    与「春眠不觉晓」之间那个单空行会被折掉 —— 两节诗焊成一节，下面的
+    kinds 当场红。诗到叙述之间的那个空行同理保留（收诗的排版习惯）。
+    """
+    res = clean_text(
+        _text(
+            "第一章 开始",
+            "",
+            "有诗为证：",
+            "床前明月光，疑是地上霜。",
+            "举头望明月，低头思故乡。",
+            "",
+            "春眠不觉晓，处处闻啼鸟。",
+            "夜来风雨声，花落知多少。",
+            "",
+            "他看罢，点了点头。",
+        ),
+        source="x",
+    )
+    kinds = [p.kind for p in res.book.chapters[0].paragraphs]
+    assert kinds == ["body", "verse", "verse", "blank", "verse", "verse", "blank", "body"], kinds
+
+
+def case_render_roundtrip_keeps_scene_breaks() -> None:
+    """回环：clean → render → clean，章节段落序列必须逐段一致。
+
+    判别式用例：渲染层把换场景（blank 段）写成两行空行。旧渲染只写 1 行，
+    回洗时 clean 会把那一个空行当成排版段间距折叠掉，第二遍的 blank 段
+    就消失，下面的序列比较当场红 —— 这正是 0.2.2-⑥ 破坏的契约
+    clean(render(clean(x))) == clean(x)。
+    """
+    from huoban.render import render_txt
+
+    def seq(book) -> list[tuple[str, str]]:
+        pairs = [(p.kind, p.text) for p in book.front_matter]
+        for ch in book.chapters:
+            pairs.append(("title", ch.title))
+            pairs.extend((p.kind, p.text) for p in ch.paragraphs)
+        return pairs
+
+    text = _text(
+        "第一章 开始", "", "正文一。", "", "", "正文二。",
+        "", "第二章 结束", "", "", "正文三。",
+    )
+    once = clean_text(text, source="x").book
+    # 先钉住前提：书里确实有换场景的 blank 段，否则回环测试测不到东西
+    assert [p.kind for p in once.chapters[0].paragraphs] == ["body", "blank", "body"], (
+        [p.kind for p in once.chapters[0].paragraphs]
+    )
+    twice = clean_text(render_txt(once), source="x").book
+    assert seq(twice) == seq(once), (seq(once), seq(twice))
 
 
 def case_leading_and_trailing_blanks_dropped() -> None:
@@ -3800,6 +3958,10 @@ _CASES = [
     case_body_mentioning_ad_word_kept,
     case_short_ad_still_removed,
     case_ad_keyword_with_exclamation_still_whole,
+    # 用户反馈（2026-11-09）：引导关注模板 / 出处水印 / 叙述句不误删
+    case_solicit_template_line_removed,
+    case_source_watermark_line_removed,
+    case_solicit_words_in_narrative_kept,
     case_ad_samples_have_line_numbers,
     case_toc_removed_keeps_body_headings,
     case_toc_does_not_eat_first_chapter,
@@ -3811,6 +3973,9 @@ _CASES = [
     case_sentence_starting_with_chapter_word,
     case_short_titles_not_reported_as_toc,
     case_blank_runs_collapsed,
+    case_double_blank_keeps_exactly_one,
+    case_verse_stanza_blank_kept,
+    case_render_roundtrip_keeps_scene_breaks,
     case_leading_and_trailing_blanks_dropped,
     case_fragments_merged,
     case_no_merge_across_blank,

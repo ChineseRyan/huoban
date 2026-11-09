@@ -324,6 +324,13 @@ class _Line:
     text: str            # normalize_line 的结果，可能带 INDENT_STR 前缀
     indented: bool
     blank: bool = False
+    # 这一行代表的**原文连续空行数**（只有空行上非零，由 _collapse_blanks 写入）。
+    #
+    # 为什么要留着它：单空行在并碎行阶段承担"不许跨空行把两段焊在一起"的分段
+    # 作用（见 _merge_fragments 的相邻判据），所以"正文夹缝里的单个空行不产出
+    # blank"只能在并碎行**之后**做。那时连续空行已经压成了 1 行，不留原文的
+    # 长度就分不清"作者只空了一行"和"原文有好几行被压成了一行"。
+    blank_run: int = 0
     heading: model.Heading | None = None
     ad: dict | None = None      # judge_ad_line 的证据（整行广告已经不在流水线里了）
     # 这一行"当前覆盖到原文第几行"。并碎行会把后面的行吸收进来，
@@ -2890,22 +2897,90 @@ def _scan_fixed(lines: list[str]) -> dict:
 
 
 def _collapse_blanks(items: list[_Line]) -> list[_Line]:
-    """连续空行压到 MAX_BLANK_RUN 行。
+    """连续空行压到 MAX_BLANK_RUN 行，并把原 run 长度记进留下的那一行。
 
     整块空行本身不承载信息（场景切换只需要"有空行"这一个事实），
     而空行是唯一会让输出体积翻倍的噪声。
+
+    留下的那一行要带上 blank_run（原文连续空行数）：压空行发生在并碎行
+    之前，那时单空行还得继续当分段界限（见 _merge_fragments），等
+    _fold_single_blanks 在并碎行之后才用这个数区分"单空行"与"整块空行"。
     """
     out: list[_Line] = []
     run = 0
+    kept: _Line | None = None
     for it in items:
         if it.blank:
             run += 1
             if run > MAX_BLANK_RUN:
+                # 超出上限的空行不再进列表，但 run 还得接着数 —— 全长要记在
+                # 留下的那一行上（上面的 MAX_BLANK_RUN 以后若调大也照此）。
+                if kept is not None:
+                    kept.blank_run = run
                 continue
+            it.blank_run = run
+            kept = it
             out.append(it)
         else:
             run = 0
+            kept = None
             out.append(it)
+    return out
+
+
+def _fold_single_blanks(items: list[_Line]) -> list[_Line]:
+    """正文夹缝里的单个空行不产出 blank；连续空行仍保留一行。
+
+    判据：空行原文只有 1 行（_Line.blank_run < 2），且前后最近的非空行
+    **都存在、都不是章节标题**，才丢。其余原样保留（连续空行保留那一个，
+    文件头尾、标题邻接的交给 _build_book 现有的"章首空行不留、章末空行
+    弹出"规则）。
+
+    为什么单空行可以丢：中文 TXT 里作者在段落之间空一行，绝大多数只是
+    排版的段间距；真正的场景切换往往连空好几行。留着的后果是每段之间都
+    多一个空段，EPUB 里满屏排开。
+
+    为什么**必须**在 _merge_fragments 之后调用：并碎行还靠单空行挡住
+    "跨空行并段"（作者用一行空行分的段，下一行开头没收句，不等于它是
+    半句）。提前丢掉就会把两个真段落焊成一段 —— tests/test_clean.py 的
+    case_no_merge_across_blank 钉的就是这条。
+
+    诗词节间的空行**不折叠**：作者用单空行分诗节（换韵、转承），那是排版
+    语义，不是段间距。判"这行是诗"要靠 _mark_verse，所以本函数还得排在它
+    之后；前后最近的非空行任一是 verse，这一个空行就留着。分隔线（＊＊＊）
+    在结果树上算正文行，不当标题处理。
+    """
+    n = len(items)
+    # 前后最近的**非空行**（下标对齐 items；没有则为 None）。
+    prev_nonblank: list[_Line | None] = [None] * n
+    last: _Line | None = None
+    for i, it in enumerate(items):
+        prev_nonblank[i] = last
+        if not it.blank:
+            last = it
+    next_nonblank: list[_Line | None] = [None] * n
+    last = None
+    for i in range(n - 1, -1, -1):
+        next_nonblank[i] = last
+        if not items[i].blank:
+            last = items[i]
+
+    out: list[_Line] = []
+    for i, it in enumerate(items):
+        # 非空行、以及"原文就是整块空行"的那一个，照旧。
+        if not it.blank or it.blank_run >= 2:
+            out.append(it)
+            continue
+        before, after = prev_nonblank[i], next_nonblank[i]
+        # 文件头尾、标题邻接：不动。章首章末的空行由 _build_book 收拾。
+        if before is None or after is None or before.is_title or after.is_title:
+            out.append(it)
+            continue
+        # 诗节之间的空行：排版语义（换韵、转承），留着不折。
+        if before.verse or after.verse:
+            out.append(it)
+            continue
+        # 正文 → 单个空行 → 正文：作者只空了一行，按段间距处理，丢掉。
     return out
 
 
@@ -4279,9 +4354,14 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
     # 才返回 None（diagnose.py:499）—— 合并出来的段落里不可能凭空长出广告信号，
     # 这里再跑一遍逐行判据必然是空转。全角网址那种「原文判不出、渲染后判得出」
     # 的情况，已经由 diagnose._FOLD_WIDE 在逐行判定阶段就地解决。
+    # 单个空行的折叠放在最后两步：并碎行还靠单空行挡"跨空行并段"
+    # （见 _merge_fragments 的 prev.last_no == it.no - 1），提前丢会把两段焊死；
+    # 诗节之间的单空行要留着，而认诗得等 _mark_verse 标完（见 _fold_single_blanks）。
+    #
     # 标诗词必须在并碎行**之后**：段落边界要等并完才是最终的，否则标记会落在
     # 已经被合并掉的行上。标完立刻组装章节树，中间不要再插入任何改行序的步骤。
     verse_lines = _mark_verse(items)
+    items = _fold_single_blanks(items)
     book, _ = _build_book(items, source=source, encoding=encoding)
 
     fixed = _scan_fixed(lines)

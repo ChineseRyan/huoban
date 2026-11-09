@@ -34,6 +34,7 @@ from xml.etree import ElementTree as ET
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from huoban import epub  # noqa: E402
 from huoban.epub import build_epub, write_epub  # noqa: E402
 from huoban.model import Book, Chapter, Paragraph  # noqa: E402
 
@@ -1239,6 +1240,66 @@ def case_volume_title_page_standalone() -> None:
     assert _tags(_chapter_roots(only_vol)[0]) == ["p", "h1"]
 
 
+# ---------- f) 2026-11-09 用户反馈：诗词块行距 / 字体子集 ----------
+
+
+def case_verse_gap_absorbed() -> None:
+    """诗词块内部的空行不再渲成 <div class="sep">，诗块每行等距。
+
+    真实来源（2026-11-09 用户反馈的《西游记》）：诗节之间原书插着空行，
+    旧实现把空行一律渲成 div.sep（高 1.1em），于是同一块诗里有的行距
+    是 0.28em、有的是 1.1em+0.28em，看着像排版坏了。用户原话：
+    "要是每行的间距都一样，那我也认了"。
+    """
+    book = _book(_chapter("第一章", [
+        Paragraph(text="诗曰："),
+        Paragraph(text="混沌未分天地乱，茫茫渺渺无人见。", kind="verse"),
+        Paragraph(text="", kind="blank"),
+        Paragraph(text="自从盘古破鸿蒙，开辟从兹清浊辨。", kind="verse"),
+        Paragraph(text="覆载群生仰至仁，发明万物皆成善。", kind="verse"),
+        Paragraph(text="", kind="blank"),
+        Paragraph(text="欲知造化会元功，须看西游释厄传。", kind="verse"),
+        Paragraph(text="正文一。"),
+    ]))
+    result = _build(book)
+    root = _chapter_roots(result)[0]
+    # 两块 verse 之间的空行（第 3、6 段）都被吞掉：诗块内 4 行紧邻
+    assert _tags(root) == ["h1", "p", "p", "p", "p", "p", "p"], _tags(root)
+    verses = [p for p in root.findall(".//xhtml:p", NS) if p.get("class") == "verse"]
+    assert len(verses) == 4, f"应有 4 个 p.verse，实际 {len(verses)}"
+    assert len(_seps(root)) == 0, "诗块内部不应再出现 div.sep"
+
+    # 但诗与正文之间的空行还是正常分隔：诗块之后接正文时空行照旧渲染
+    book2 = _book(_chapter("第一章", [
+        Paragraph(text="混沌未分天地乱。", kind="verse"),
+        Paragraph(text="", kind="blank"),
+        Paragraph(text="正文一。"),
+    ]))
+    root2 = _chapter_roots(_build(book2))[0]
+    assert _tags(root2) == ["h1", "p", "div", "p"], _tags(root2)
+    assert len(_seps(root2)) == 1, "诗与正文之间的空行仍应保留"
+
+
+def case_font_subset_includes_front_matter() -> None:
+    """内嵌字体的子集必须收前言/后记（front_matter / tail_matter）里的字。
+
+    真实来源（2026-11-09 用户反馈的《西游记》）：子集只收章节正文与目录，
+    第一章前那段"简介"被漏掉，简介里的 30 多个字不在子集里，阅读器逐字
+    退回系统字体，看起来就是"字体不一"。
+    """
+    rarities = "奘佚典浒奘"      # 只出现在前言里的字
+    book = _book(
+        _chapter("第一章", [Paragraph(text="正文甲。")]),
+        front=[Paragraph(text=f"简介：{rarities}")],
+        tail=[Paragraph(text="后记乙。")],
+    )
+    chars = epub._collect_font_chars(book, "", "", [])
+    missing_front = [ch for ch in rarities if ch not in chars]
+    assert not missing_front, f"前言里的字没进子集：{missing_front}"
+    assert "乙" in chars, "后记里的字也要进子集"
+    assert "甲" in chars and "正" in chars and "文" in chars, "章节正文的字不能丢"
+
+
 def main() -> int:
     cases = [
         case_package_structure,
@@ -1283,6 +1344,9 @@ def main() -> int:
         # 封底（2026-11-06）
         case_back_cover_page,
         case_back_cover_unusable_produces_no_page,
+        # 用户反馈（2026-11-09）：诗词块行距 / 字体子集收前言
+        case_verse_gap_absorbed,
+        case_font_subset_includes_front_matter,
     ]
     failed = 0
     for c in cases:
