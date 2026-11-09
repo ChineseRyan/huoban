@@ -1,6 +1,7 @@
 """从"活板"白文印蒙版生成应用图标。
 
-蒙版（_shot/about_mock/mask_264.png）是界面"关于"页那枚印章的 alpha 通道：
+蒙版（gui/assets/icon_mask_264.png，原始出处 _shot/about_mock/mask_264.png）
+是界面"关于"页那枚印章的 alpha 通道：
 白色字形处 alpha 高，印面其余部分 alpha 低。界面上靠 CSS 把印面染成
 var(--seal)（浅色 #A83A2E / 深色 #E07A6C），这里做的是同一件事的位图版。
 
@@ -29,7 +30,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-MASK = ROOT / "_shot" / "about_mock" / "mask_264.png"
+MASK = ROOT / "gui" / "assets" / "icon_mask_264.png"
 ASSETS = ROOT / "gui" / "assets"
 SEAL_LIGHT = (0xA8, 0x3A, 0x2E, 255)
 SEAL_DARK = (0xE0, 0x7A, 0x6C, 255)
