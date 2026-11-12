@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>活板 · 关于页（精修对比稿 v2 · 浅色 / 深色）</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#E6E3DA;color:#1B1D1E;
+  font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  padding:36px 24px 56px;
+}
+.wrap{max-width:860px;margin:0 auto}
+header{margin-bottom:26px}
+h1{font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:.04em}
+.sub{font-size:12px;color:#6B6F72;line-height:1.7}
+.label{font-size:12px;color:#5A5E61;letter-spacing:.1em;margin:26px 0 8px}
+
+/* 第 8 条：窄屏兜底。默认窄屏值，宽屏在 media 里覆盖 */
+.stage{
+  width:100%;height:440px;
+  display:flex;flex-direction:column;padding:0 24px;
+  border:1px solid var(--rule);
+  background:var(--paper);color:var(--ink);
+  --mark: url("data:image/png;base64,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");
+}
+.stage.light{
+  /* 第 1 条：浅色 --ink-3 压深到 #6F695F */
+  --paper:#F1EFE8; --ink:#1B1D1E; --ink-3:#6F695F;
+  --seal:#A83A2E; --seal-border:rgba(168,58,46,0.4);
+  --rule:rgba(27,29,30,0.16);
+  --sans:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+.stage.dark{
+  /* 第 1 条：深色 --ink-3 提到 #8D8880；第 2 条：朱砂压暗成 #D65E4D */
+  --paper:#15181D; --ink:#E8E4DA; --ink-3:#8D8880;
+  --seal:#D65E4D; --seal-border:rgba(214,94,77,0.45);
+  --rule:rgba(232,228,218,0.16);
+  --sans:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+.center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ab-mark{
+  /* 第 8 条：印面响应式 */
+  width:clamp(72px,18vw,112px);height:clamp(72px,18vw,112px);
+  background-color:var(--seal);
+  -webkit-mask-image:var(--mark);mask-image:var(--mark);
+  -webkit-mask-size:100% 100%;mask-size:100% 100%;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+}
+.ab-ver{
+  /* 第 1 条：等宽数字 */
+  margin-top:34px;font-family:var(--sans);font-size:12px;
+  letter-spacing:0.16em;margin-right:-0.16em;
+  color:var(--ink-3);line-height:1.6;
+  font-variant-numeric:tabular-nums;
+}
+.footer{
+  /* 第 4 条：垂直重心 24 / 32；第 8 条：允许换行 */
+  display:flex;align-items:center;flex-wrap:wrap;gap:16px;
+  border-top:1px solid var(--rule);
+  padding:24px 0 32px;
+}
+.links{display:flex;align-items:center;gap:24px}
+.lnk{
+  color:var(--ink);text-decoration:none;font-family:var(--sans);
+  font-size:13px;letter-spacing:.02em;cursor:pointer;
+}
+/* 第 7 条：箭头交给 CSS，变小、上浮、强制文本渲染，不再写进 HTML */
+.lnk::after{
+  content:"\2197";
+  font-size:0.85em;margin-left:2px;vertical-align:0.15em;
+  font-variant-emoji:text;
+}
+/* 两链接之间的分隔线（开发者 2026-11-12 要求从圆点恢复为竖线） */
+.sep{width:1px;height:18px;background:var(--rule)}
+.btn{
+  /* 第 3 条：框收窄到 120px；margin-left:auto 全局生效，
+     窄屏 footer 换行后按钮仍被推到所在行最右（修复落在左下角的问题） */
+  margin-left:auto;min-width:120px;height:36px;padding:0 16px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:none;border:1px solid var(--seal-border);border-radius:0;
+  color:var(--seal);font-family:var(--sans);font-size:12px;cursor:pointer;
+}
+.btn span{
+  /* 第 1、3 条：等宽数字 + 字距降到 0.08em */
+  letter-spacing:0.08em;margin-right:-0.08em;
+  font-variant-numeric:tabular-nums;
+}
+/* 第 6 条：审核通过前禁用态在视觉上退后 */
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+
+/* 第 8 条：宽屏恢复 48px 内边距与按钮靠右 */
+@media (min-width:600px){
+  .stage{padding:0 48px}
+}
+
+.note{
+  margin-top:30px;padding-top:16px;border-top:1px solid rgba(0,0,0,.12);
+  font-size:12px;line-height:1.95;color:#5A5E61;
+}
+.note code{font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>活板 · 关于页（精修对比稿 v2）</h1>
+  <div class="sub">基于乙1 最终稿 · 三个梯队 8 条已落实 · 一页并列浅色与深色，供对比</div>
+</header>
+
+<div class="label">浅色模式</div>
+<div class="stage light">
+  <div class="center"><div class="ab-mark"></div><div class="ab-ver">0.2.1</div></div>
+  <div class="footer">
+    <div class="links">
+      <a class="lnk" href="#">小红书主页</a>
+      <span class="sep"></span>
+      <a class="lnk" href="#">GitHub 项目页</a>
+    </div>
+    <button class="btn" type="button" disabled aria-disabled="true"><span>请喝杯茶</span></button>
+  </div>
+</div>
+
+<div class="label">深色模式</div>
+<div class="stage dark">
+  <div class="center"><div class="ab-mark"></div><div class="ab-ver">0.2.1</div></div>
+  <div class="footer">
+    <div class="links">
+      <a class="lnk" href="#">小红书主页</a>
+      <span class="sep"></span>
+      <a class="lnk" href="#">GitHub 项目页</a>
+    </div>
+    <button class="btn" type="button" disabled aria-disabled="true"><span>请喝杯茶</span></button>
+  </div>
+</div>
+
+<div class="note">
+  这是<strong>精修对比稿</strong>，不是产品界面；与 <code>designs/about-final.html</code> 并列留存，用于对比效果。
+  印面沿用现役 112px 蒙版与 <code>var(--seal)</code> 运行时染色，<strong>没有重画 logo</strong>；
+  独立资产见 <code>gui/assets/about_seal_light.png</code>、<code>about_seal_dark.png</code>、<code>about_seal_mask.png</code>，
+  库存登记见 <code>docs/design-assets.md</code>。<br>
+  相对最终稿的改动：浅色 <code>--ink-3:#6F695F</code> / 深色 <code>--ink-3:#8D8880</code>；
+  深色朱砂 <code>#E07A6C → #D65E4D</code>；版本号与按钮加 <code>tabular-nums</code>；
+  按钮 148→120px、字距 0.16→0.08em（含光学补偿）；footer 上下留白 18/48 → 24/32；
+  两链接间保留竖分隔线（圆点方案已回退）；禁用态 <code>opacity:.5</code> + <code>not-allowed</code>；
+  箭头由 CSS 伪元素绘制并强制文本渲染；响应式 <code>clamp()</code> 印面 + <code>@media 600px</code> 兜底；
+  按钮 <code>margin-left:auto</code> 全局生效，窄屏 footer 换行后仍保持在右下角。<br>
+  实现约束：打赏通道审核通过前，按钮保持 <code>disabled</code> + <code>aria-disabled</code>、无 <code>href</code>；
+  两条外链须 <code>preventDefault()</code> + <code>stopPropagation()</code> 并经 <code>js_api</code> 打开系统浏览器。
+  本文件未修改 <code>gui/ui.html</code>、<code>gui/api.py</code> 及任何源码。
+</div>
+</div>
+<script>
+document.querySelectorAll('.lnk, .btn').forEach(function(el){
+  el.addEventListener('click', function(e){ e.preventDefault(); });
+});
+</script>
+</body>
+</html>

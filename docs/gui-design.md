@@ -159,9 +159,11 @@
   内嵌在 `gui/ui.html` 的 `.ab-mark` 蒙版里，独立文件只在 `backups/trash-20261106/_about_logo.png`
   留过一份。现补三份独立资产，都是 264×264 RGBA：
   `about_seal_light.png`（浅色，印色取浅色 `--seal` `#A83A2E`）、
-  `about_seal_dark.png`（深色，印色取深色 `--seal` `#E07A6C`）、
+  `about_seal_dark.png`（深色，印色 `#D65E4D`；2026-11-12 开发者定，见 `docs/notes/about-seal-dark-color.md`）、
   `about_seal_mask.png`（母版，手 P 透明底图本体，与 `gui/ui.html` 内嵌 base64 逐字节一致）。
-  浅/深两版都由母版按 `--seal` 着色导出，形状与做旧边缘完全一致，不重画。
+  浅/深两版都由母版着色导出，形状与做旧边缘完全一致，不重画。浅色 `#A83A2E` 与现役浅色 `--seal` 相同；
+  深色按开发者 2026-11-12 决策改为 `#D65E4D`（v2 候选稿的新版朱砂），不再取现役 `--seal` 的 `#E07A6C`。
+  现行（本次更新前）深色印色是 `#E07A6C`，已随本次资产更新作废。
   **现役 `gui/ui.html` 仍走内嵌 base64 + `var(--seal)` 运行时染色**，这三份是独立资产留存与
   设计稿取图用，运行时引用未改；后续若改成文件引用，深浅切换要同步换文件。
 

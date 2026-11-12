@@ -72,8 +72,15 @@
 | `about_seal_light.png` / `about_seal_dark.png` | **关于页**印面（浅 / 深） |
 | `about_seal_mask.png` | 关于页印面蒙版；与 `gui/ui.html` 里内嵌的 base64 蒙版逐字节相同 |
 
-关于页那三张目前**没有被代码引用**（`gui/ui.html` 用的是内嵌 base64，尺寸 264×264，底色吃 `var(--seal)`：
-浅 `#A83A2E`、深 `#E07A6C`），作为素材与依据留存。
+关于页那三张目前**没有被代码引用**：`gui/ui.html` 用的是内嵌 base64（264×264），底色吃 `var(--seal)`
+运行时染色，浅 `#A83A2E`、深 `#E07A6C`；三张 PNG 是独立素材与依据留存，色值以下面这段为准。
+
+**深色资产印色（2026-11-12 开发者定）**：`about_seal_dark.png` 已由现行 `#E07A6C` 更新为
+**新版 `#D65E4D`**（v2 候选稿 `designs/about-final-v2.html` 的深色朱砂），仍由母版 alpha 着色导出、
+形状与做旧边缘不变。浅色 `about_seal_light.png` 保持 `#A83A2E` 不变。
+注意**现役 `gui/ui.html` 的深色 `--seal` 仍是 `#E07A6C`**，运行时引用未改；
+后续落地 v2 时要同步改代码里的深色变量，别以为改了资产就自动生效。
+决策记录见 `docs/notes/about-seal-dark-color.md`。
 
 **两枚「印」不是同一份**：图标母版 `_shot/about_mock/mask_264.png`（= `gui/assets/icon_mask_264.png`）
 与关于页的 `about_seal_mask.png` 墨迹不同，别互相替代。
@@ -81,6 +88,13 @@
 ## 三、设计稿
 
 - `designs/about-redesign.html` —— 关于页重设计的候选稿合集，敲定的是「乙 · 终稿一 · 朱印细框」。已入库。
+- `designs/about-final.html` —— **关于页最终视觉稿**：乙1 敲定版，一页并列浅色 / 深色两版；
+  按钮文案定为「请喝杯茶」（不带审核中），印面沿用现役 112px 蒙版与 `var(--seal)` 染色，不重画。已入库。
+- `designs/about-final-v2.html` —— **精修对比稿**：基于最终稿，按开发者 2026-11-12 的三梯队 8 条意见调整
+  （版本号 `--ink-3` 压深 + `tabular-nums`、深色朱砂 `#E07A6C → #D65E4D`、按钮收窄到 120px、
+  footer 留白 24/32、禁用态退后、箭头改 CSS 伪元素、响应式兜底；
+  2026-11-12 修订：两链接分隔恢复竖线、按钮 `margin-left:auto` 全局生效使窄屏换行后仍保持右下角），
+  一页并列浅色 / 深色，供与最终稿对比；**不改产品源码**。已入库。
 - `design/` —— 封面与动效的候选稿（不进仓库）。`03-终稿` 只由开发者挪，肥鱼不动。
 
 ## 四、新增或替换资产时必须做的
