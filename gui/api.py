@@ -1,6 +1,6 @@
 """js_api 实现：把清洗跑在后台线程里，前端只轮询。
 
-设计约束（docs/gui-design.md §5）：
+设计约束（docs/gui-design.md 的「后端：`gui/api.py`」一节）：
 
 1. `util.py` 的 `js_bridge_call` **每次 JS 调用都新起一个线程**，所以 Python 侧
    不能假设串行，也不能在 API 方法里直接跑清洗 —— 一本 8 MB 的书要几十秒，
@@ -18,6 +18,8 @@
 猜自己书里写了什么，根本没法核对。所以复核页给真原文，且**按需给**：列表只送
 60 字摘要，点开某一行才取前后文（`review_detail`）。`redact` 那条铁律是"真书正文
 不进 AI 会话"，界面不出门，不受它管。
+
+界面里的「决定N」见 `docs/notes/ui-round2-decisions.md`（N 即该笔记表格的编号）。
 """
 
 from __future__ import annotations
@@ -43,10 +45,10 @@ from huoban.model import save as save_book
 from huoban.model import stats as real_stats
 from huoban.model import validate_items as validate_items
 
-# 输入上限：50 MB。再大就别在界面里等了，先去命令行跑（设计文档 §10 验收 5）。
+# 输入上限：50 MB。再大就别在界面里等了，先去命令行跑（docs/gui-design.md 的「验收」一节第 5 条）。
 MAX_INPUT_BYTES = 50 * 1024 * 1024
 
-# 两条入口共用同一条产线（§12）：TXT 走清洗，EPUB 走导入（`epubread`）。
+# 两条入口共用同一条产线（docs/gui-design.md 的「EPUB 导入」一节）：TXT 走清洗，EPUB 走导入（`epubread`）。
 # 导入这条路不跑 clean.py —— 章节边界由 OPF spine + nav/NCX 白送，
 # 目录块与广告行基本不存在，再洗一遍只会把正常排版当脏数据。
 TXT_SUFFIXES = {".txt", ".text"}
@@ -59,10 +61,10 @@ INPUT_SUFFIXES = TXT_SUFFIXES | EPUB_SUFFIXES
 # （TODO 0.2.2 第 1 条给的文案「虽为书稿，活板无能为力」）。
 DOC_SUFFIXES = {".doc", ".docx", ".docm", ".dotm", ".dotx", ".rtf", ".wps", ".odt", ".pages"}
 
-# 导入 EPUB 时把插图落在这个子目录里（CLI reflow 也叫 images/，§6）。
+# 导入 EPUB 时把插图落在这个子目录里（CLI reflow 也叫 images/，见 docs/gui-design.md 的「数据契约与产物目录」一节）。
 IMAGES_DIR = "images"
 
-# 产物目录后缀。CLI 用 `<名>_clean/`，GUI 用 `<名>_gui/`，两者不撞（§6）。
+# 产物目录后缀。CLI 用 `<名>_clean/`，GUI 用 `<名>_gui/`，两者不撞（docs/gui-design.md 的「数据契约与产物目录」一节）。
 OUTDIR_SUFFIX = "_gui"
 
 # Windows 文件名非法字符。书名是从正文里猜出来的，可能带 / 或 : 之类。
@@ -540,7 +542,7 @@ def _summary(report: dict, *, outdir: Path) -> dict:
         "alerts": _alerts(report, report.get("chapters") or {}),
         # TXT 这条路永远没有插图，images 恒为 0。
         "content_state": _content_state(int(stats.get("chars") or 0), 0),
-        # 整本糊成一行是独立病灶，结果页要能单独顶一条横幅（§4 要点）。
+        # 整本糊成一行是独立病灶，结果页要能单独顶一条横幅（docs/gui-design.md 的「视图」一节的要点）。
         "oneline": {
             "suspected": bool(oneline.get("suspected")),
             "long_line_count": oneline.get("long_line_count") or 0,
@@ -722,7 +724,7 @@ def _import_summary(imp_report: dict, book, *, outdir: Path) -> dict:
     **不复用 `_summary`**：那份读的是清洗报告（编码、删除行、碎行合并…），
     导入的书一个都没有 —— 导入不做清洗。硬塞一堆 0 进去会让用户以为
     "清洗跑了但什么都没删"，那是假信息。这里如实给导入自己的口径，
-    前端按 `kind` 分支画不同的行（§12 两条入口共用产线，但不是同一个账单）。
+    前端按 `kind` 分支画不同的行（docs/gui-design.md 的「EPUB 导入」一节：两条入口共用产线，但不是同一个账单）。
     """
     stats = real_stats(book)
     kept = int(imp_report.get("images_kept") or 0)
@@ -750,7 +752,7 @@ def _import_summary(imp_report: dict, book, *, outdir: Path) -> dict:
         "verse": {},
         "adjust": {},
         "warnings": list(imp_report.get("warnings") or []),
-        # 0 字但有图 = 图集/漫画，与"空壳文件"是两回事，界面文案不同（§10 第 5 条）。
+        # 0 字但有图 = 图集/漫画，与"空壳文件"是两回事，界面文案不同（docs/gui-design.md 的「验收」一节第 5 条）。
         "content_state": _content_state(int(stats.get("chars") or 0), kept),
         "oneline": {"suspected": False, "long_line_count": 0, "lines_with_multiple_chapters": 0},
         # 导入账单：只给计数，不给图片文件名（那些名字来自原书，没必要送进界面）。
@@ -1461,7 +1463,7 @@ class Api:
                 f"文件 {size / 1024 / 1024:.1f} MB，超过 {MAX_INPUT_BYTES // 1024 // 1024} MB 上限"
             )
         # 0 字节不是"很短的书"，是根本没有内容。放行会一路走完清洗、拿回 0 章 0 字，
-        # 界面显示成一次成功 —— 这是 §10 第 5 条实测六种异常路径时唯一的文案缺口。
+        # 界面显示成一次成功 —— 这是 docs/gui-design.md 的「验收」一节第 5 条实测六种异常路径时唯一的文案缺口。
         # 刻意不写成"小于 1KB 就拒"：那会挡住真的只有几十字的占位文件，
         # 而 0 字节是事实，不是猜。
         if size == 0:
@@ -1495,7 +1497,7 @@ class Api:
                 "照旧清洗、成书（成书后是一整段没有分段的文字）。"
             )
 
-        # 产物目录：<输入同目录>/<书名>_gui/（§6）。书名从正文里猜过，
+        # 产物目录：<输入同目录>/<书名>_gui/（docs/gui-design.md 的「数据契约与产物目录」一节）。书名从正文里猜过，
         # 猜不出来时 clean.py 会退回文件名，所以这里一定非空。
         #
         # **不能写死成 `<书名>_gui`**：两本不同的书解析出同一个书名是常事
@@ -1504,7 +1506,7 @@ class Api:
         # 由 `_import_outdir` 决定：同源重导复用、异源撞名另起 `(2)`。
         outdir = _import_outdir(src, book.title or src.stem)
         outdir.mkdir(parents=True, exist_ok=True)
-        # 撞车保护放在写盘这一层（§6 硬约束 1）。GUI 的目录名带 _gui 后缀，
+        # 撞车保护放在写盘这一层（docs/gui-design.md 的「数据契约与产物目录」一节里第 1 条硬约束）。GUI 的目录名带 _gui 后缀，
         # 正常不会撞上输入文件，但"永不修改输入"不能只靠命名约定。
         for target in (outdir / "book.json", outdir / "report.json"):
             if target.exists():
@@ -1586,7 +1588,7 @@ class Api:
 
         outpath = out_dir / f"{stem}.epub"
 
-        # 撞车保护（§6 硬约束 1）：绝不覆盖输入文件。GUI 的产物目录带 _gui 后缀，
+        # 撞车保护（docs/gui-design.md 的「数据契约与产物目录」一节里第 1 条硬约束）：绝不覆盖输入文件。GUI 的产物目录带 _gui 后缀，
         # 正常情况下撞不上，但这条不能只靠命名约定 —— 用户可以改书名，
         # 也可能有人把产物目录设成输入所在目录。放在写盘层才是兜底的。
         if outpath.exists():
@@ -1597,7 +1599,7 @@ class Api:
             if same:
                 raise SystemExit(f"输出路径与输入文件相同，拒绝写入：{outpath}")
 
-        # 可复现（§6 硬约束 2）：modified 取输入文件的 mtime，不用当前时间。
+        # 可复现（docs/gui-design.md 的「数据契约与产物目录」一节里第 2 条硬约束）：modified 取输入文件的 mtime，不用当前时间。
         # 同一个 TXT 隔一天打两次，得到的包仍然逐字节相同。
         modified = _modified_from(session.source)
         cover_path = self._cover_for_build(session, meta)
@@ -1618,7 +1620,7 @@ class Api:
             back_cover=back_path,
             modified=modified,
             fonts=bool(meta.get("fonts", True)),
-            # 导入的书可能带插图：它们在产物目录的 images/ 下（§12）。
+            # 导入的书可能带插图：它们在产物目录的 images/ 下（docs/gui-design.md 的「EPUB 导入」一节）。
             # TXT 那条路没有这个键，传 None 就是原来的行为。
             image_dir=session.extra.get("images_dir"),
         )
@@ -1694,7 +1696,7 @@ class Api:
     def _run_import_epub(self, job: Job, session: Session) -> None:
         """导入一本 EPUB：读成章节树 → 落产物 → 出摘要。
 
-        与 TXT 那条路的关键区别（§12）：
+        与 TXT 那条路的关键区别（docs/gui-design.md 的「EPUB 导入」一节）：
         - **不跑 clean.py**。章节边界由 OPF spine + nav/NCX 白送，编码由 XHTML
           自带声明，目录块与广告行基本不存在 —— 再洗一遍只会把正常排版当脏数据。
         - 插图要落盘（`images/`），打包时再由 `image_dir` 找回来。
@@ -1796,7 +1798,7 @@ class Api:
     def _cover_for_build(self, session: Session, meta: dict) -> Path | None:
         """按 ④ 页的选择准备封面文件，返回路径给 build_epub 的 cover_path。
 
-        §8.6 的硬要求：**不给 build_epub 加新参数**。海报写成产物目录里的
+        docs/gui-design.md 的「`gui/cover.py` 接口」一节的硬要求：**不给 build_epub 加新参数**。海报写成产物目录里的
         cover.png，路径当 cover_path 传进去，自然复用 `epub._load_cover`
         的扩展名 + 魔数校验；打包层零改动，也不碰 test_epub.py 那条
         "无封面时不应产出 Images/cover.png" 的断言。
@@ -2182,7 +2184,7 @@ class Api:
     def apply_adjust(self, job_id: str, adjust: dict | None = None) -> dict:
         """③ → ②：带着人工调整重跑一遍清洗。登记 + 起 worker，立刻返回 job_id。
 
-        「调整不丢」（§4 要点 3）：新的 adjust 会替换掉会话里那一份，重跑成功后
+        「调整不丢」（docs/gui-design.md 的「视图」一节要点 3）：新的 adjust 会替换掉会话里那一份，重跑成功后
         ② 页看到的数字就是调整后的。撤销一条 = 前端把那一行从 adjust 里去掉
         再调一次本方法 —— 所以这里收的是**完整的**新 adjust，不是增量。
         """
@@ -2249,7 +2251,7 @@ class Api:
         return {"job_id": job.job_id}
 
     def pick_cover(self, job_id: str) -> dict:
-        """选一张自己的图当封面（§8.7）。返回归一化后的预览 data_url。
+        """选一张自己的图当封面（docs/gui-design.md 的「顺带补掉一个现存缺口」一节）。返回归一化后的预览 data_url。
 
         为什么在导入阶段就归一化：`epub._load_cover` 完全没有缩放与 EXIF 处理，
         手机拍的 4000×3000 JPEG 会原样进包（几十 MB），而且 Orientation 不归一化
@@ -2289,7 +2291,7 @@ class Api:
     def preview_cover(self, job_id: str, opts: dict | None = None) -> dict:
         """画一张封面预览，返回 data_url（约 100KB PNG，同步算完）。
 
-        §5 说 preview_cover 可以同步算：一张 1200×1600 约 119ms，远低于
+        docs/gui-design.md 的「后端：`gui/api.py`」一节说 preview_cover 可以同步算：一张 1200×1600 约 119ms，远低于
         "必须起 worker" 的门槛，起线程反而会让用户连点「换一个」时看到错序。
 
         ★ opts 必须是**位置参数第二项**，不能写成 keyword-only：
@@ -2413,7 +2415,7 @@ class Api:
             picked = self._window.create_file_dialog(
                 dialog_type=webview.FileDialog.OPEN,
                 allow_multiple=False,
-                # TXT 与 EPUB 都是入口（§12），文件类型过滤也要跟上，
+                # TXT 与 EPUB 都是入口（docs/gui-design.md 的「EPUB 导入」一节），文件类型过滤也要跟上，
                 # 否则文件对话框默认筛掉 .epub，用户得手动改成"所有文件"。
                 file_types=("TXT 或 EPUB (*.txt;*.text;*.epub)", "所有文件 (*.*)"),
             )
@@ -2453,7 +2455,7 @@ class Api:
         return {"path": str(picked)}
 
     def reveal_in_explorer(self, path: str) -> dict:
-        """打开文件所在的目录（§5）。给的是文件就打开它所在目录，给目录就直接开。"""
+        """打开文件所在的目录（docs/gui-design.md 的「后端：`gui/api.py`」一节）。给的是文件就打开它所在目录，给目录就直接开。"""
         target = Path((path or "").strip())
         if not target.exists():
             return {"ok": False, "error": f"路径不存在：{target}"}
@@ -2499,13 +2501,13 @@ def _dumps(data) -> str:
 
 
 def _modified_from(src: Path) -> str:
-    """dcterms:modified 取**输入文件的修改时间**，不取当前时间（§6 硬约束 2）。
+    """dcterms:modified 取**输入文件的修改时间**，不取当前时间（docs/gui-design.md 的「数据契约与产物目录」一节里第 2 条硬约束）。
 
     这是"同样输入打两次得到同一份字节"的关键。取当前时间的话，同一个 TXT
     隔一秒打两次就是两个不同的包，任何"构建产物可复现"都无从谈起。
 
     与 cli.py 的 `_resolve_modified(None, src)` 同一口径，但这里不提供 "now"
-    分支 —— GUI 不给"用当前时间"的开关（§6），界面上没有地方表达这个意图。
+    分支 —— GUI 不给"用当前时间"的开关（docs/gui-design.md 的「数据契约与产物目录」一节），界面上没有地方表达这个意图。
     """
     try:
         mtime = datetime.fromtimestamp(os.path.getmtime(src), tz=timezone.utc)
@@ -2521,7 +2523,7 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-# 自选封面图的归一化上限（§8.7 对等 Calibre 的 maximum_cover_size）
+# 自选封面图的归一化上限（docs/gui-design.md 的「顺带补掉一个现存缺口」一节：对等 Calibre 的 maximum_cover_size）
 COVER_MAX_W, COVER_MAX_H = 1650, 2200
 # 归一化后统一存 JPEG：手机原图动辄 4000×3000，压到 1650×2200 的 PNG 反而更大
 COVER_JPEG_QUALITY = 88
@@ -2552,7 +2554,7 @@ def _cover_preview(src, *, max_w: int = 700, max_h: int = 933) -> str:
 
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im)
-            # 带透明通道的 PNG 直接 convert("RGB") 会按黑底压平（§8.5 同源）
+            # 带透明通道的 PNG 直接 convert("RGB") 会按黑底压平（与 docs/gui-design.md 的「硬性约束」一节同源）
             if im.mode in ("RGBA", "LA", "P"):
                 im = im.convert("RGBA")
                 bg = Image.new("RGB", im.size, (255, 255, 255))
@@ -2572,11 +2574,11 @@ def _cover_preview(src, *, max_w: int = 700, max_h: int = 933) -> str:
 def _normalize_cover_image(src: Path, target: Path) -> str:
     """EXIF 方向归一 + 保比例缩放 + 重编码，返回 data_url 供界面预览。
 
-    §8.7：`epub._load_cover` 完全没有缩放与 EXIF 处理，手机竖拍的图会原样进包
+    docs/gui-design.md 的「顺带补掉一个现存缺口」一节：`epub._load_cover` 完全没有缩放与 EXIF 处理，手机竖拍的图会原样进包
     （几十 MB），Orientation 不归一化时部分阅读器还会把封面横过来。这一层
     在**导入阶段**做一次，清洗/打包层仍然不引 Pillow，纯 CLI 行为不变。
 
-    ★ PIL alpha 陷阱（§8.5 同源）：带透明通道的 PNG 直接 convert("RGB")
+    ★ PIL alpha 陷阱（与 docs/gui-design.md 的「硬性约束」一节同源）：带透明通道的 PNG 直接 convert("RGB")
       会按黑底压平，白底图变成黑底。这里先铺白底再贴上去。
     """
     try:

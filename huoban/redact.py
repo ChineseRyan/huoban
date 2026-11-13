@@ -271,7 +271,7 @@ def redact_report(report: dict, *, name_map: dict[str, str] | None = None) -> di
             new_samples[bucket] = new_items
         out["samples"] = new_samples
 
-    # 全量删除清单（§7 adjust 实装时新增）：每条都带"前 60 字"，是真书正文，
+    # 全量删除清单（docs/gui-design.md 的「adjust 接口」实装时新增）：每条都带"前 60 字"，是真书正文，
     # 必须与 samples 同口径换形状描述。漏了这一处，--redact 的输出里就有正文了。
     dropped = out.get("dropped_lines")
     if isinstance(dropped, list):

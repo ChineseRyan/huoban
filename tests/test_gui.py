@@ -532,7 +532,7 @@ def case_import_summary_carries_source_size():
 def case_pick_file_offers_epub_too():
     """「选文件」的对话框必须同时认 TXT 与 EPUB（review #4 的 S6）。
 
-    后端早就支持拖 .epub（§12），但对话框的 file_types 只写了 txt ——
+    后端早就支持拖 .epub（docs/gui-design.md 的「EPUB 导入」一节），但对话框的 file_types 只写了 txt ——
     用户点"也可以点这里选文件"时看到的是被筛过的列表，.epub 是灰的。
     用一个假窗口接住调用参数就能验，不用真开窗。
     """
@@ -1068,7 +1068,7 @@ def case_epub_failure_leaves_no_stage_dir():
 
 
 def case_zero_byte_file_is_rejected_at_entry():
-    """0 字节文件必须在入口就拒掉（§10 第 5 条实测出的唯一文案缺口）。
+    """0 字节文件必须在入口就拒掉（docs/gui-design.md 的「验收」一节第 5 条实测出的唯一文案缺口）。
 
     早先它一路走完清洗，拿回 0 章 0 字 + 两条技术警告，界面显示成一次**成功** ——
     用户拖错文件时看到的就是这个。规则写成"等于 0 字节"而不是"小于 1KB"：
@@ -1178,7 +1178,7 @@ def case_summary_content_state_flags_a_textless_book():
 def case_import_summary_separates_images_only_from_empty():
     """0 字 + 有图是图集/漫画，0 字 + 没图才是空壳 —— 两句话，不能混。
 
-    把漫画说成"你拖错了文件"是假话；把空壳说成"正常结果"是 §10 第 5 条那个缺口。
+    把漫画说成"你拖错了文件"是假话；把空壳说成"正常结果"是 docs/gui-design.md 的「验收」一节第 5 条那个缺口。
     """
     from gui.api import _import_summary
     from huoban.model import Book, Chapter, Paragraph

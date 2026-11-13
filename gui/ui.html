@@ -5,14 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>活板</title>
 <!--
-  单文件界面，零构建、零 npm（docs/gui-design.md §1）。
+  单文件界面，零构建、零 npm（docs/gui-design.md 的「目标与边界」一节）。
+  界面里的「决定N」见 `docs/notes/ui-round2-decisions.md`（N 即该笔记表格的编号）。
 
   视觉口径：这本书的工具，界面就该像纸。底色用封面那套「宣纸」(#F1EFE8)，
   正文用「墨」(#1B1D1E)，唯一的彩色是封面方案里的「印」(#A83A2E)，
   只出现在主按钮和警告上。不用阴影、不用渐变、不用圆角卡片堆叠 ——
-  这些正是设计文档 §1「明确不做」之外最容易让工具显得像演示页的东西。
+  这些正是 docs/gui-design.md 的「目标与边界」一节「明确不做」之外最容易让工具显得像演示页的东西。
 
-  换视图只切 body 上的 class（§3 陷阱 2：二次 load_html 会丢拖放监听，
+  换视图只切 body 上的 class（docs/gui-design.md 的「三个实现陷阱」一节陷阱 2：二次 load_html 会丢拖放监听，
   所以启动只 load 一次）。
 -->
 <style>
@@ -2295,7 +2296,7 @@
 
   var el = function (id) { return document.getElementById(id); };
 
-  // 五个视图就是流程的五步（design §4）。复核那一步是可选的，
+  // 五个视图就是流程的五步（docs/gui-design.md 的「视图」一节）。复核那一步是可选的，
   // 但它确实是流程里的一站，跳过它不改变后面是第几步 —— 编号跟着视图走，
   // 不跟着"走了几条路"走，否则同一步在不同路径下编号不同，更让人迷惑。
   // 号码写在页面左上角（.pgno），不写在顶栏：顶栏只放"这是什么程序"，
@@ -3099,7 +3100,7 @@
     el("r-title").title = payload.file || "";
 
     // 先说"这本书打开有没有东西读"，再给账单：0 字 0 章的版面跟成功一模一样，
-    // 是 §10 第 5 条实测六种异常路径后剩下的唯一文案缺口。
+    // 是 docs/gui-design.md 的「验收」一节第 5 条实测六种异常路径后剩下的唯一文案缺口。
     // 状态由后端算（_content_state），前端只配句子 —— 别在这儿再判一次字数。
     var state = payload.content_state || "text";
     var emptyBox = el("r-empty");
@@ -3931,7 +3932,7 @@
       azw3: el("m-azw3").checked
     };
     // 封面模式一起送过去。不给 cover_mode 就是"无封面"——
-    // 打包层据此完全不碰 cover_path 参数（§8.6：不给 build_epub 加新参数）。
+    // 打包层据此完全不碰 cover_path 参数（docs/gui-design.md 的「`gui/cover.py` 接口」一节：不给 build_epub 加新参数）。
     if (coverState.mode === "auto" && coverState.look) {
       meta.cover_mode = "auto";
       // 送整项而不是拆开送 template/theme/background：
@@ -4010,7 +4011,7 @@
 
   // ---------- 关于 ----------
   // 这一屏没有按钮，也没有左上角的返回箭头。出口只有两个：Esc、点页面。
-  // 这是用户明知道「看不出来怎么退出」也要换来的干净（决定见交接文档 §9.1）：
+  // 这是用户明知道「看不出来怎么退出」也要换来的干净（决定见 `docs/archive/ui-handover-round3.md` 的 9.1 节）：
   // 一块牌记上多任何一枚控件，它就变成一张设置页了。
   // 整页都算「空白处」—— 点印面上也算。规则只有一条，讲一次就懂。
 
@@ -4342,7 +4343,7 @@
 
   // ---------- 拖放：一团墨跟着手 ----------
   //
-  // drop 监听由 Python 端用 DOMEventHandler 注册（§3 陷阱 1）：JS 这边拿不到
+  // drop 监听由 Python 端用 DOMEventHandler 注册（docs/gui-design.md 的「三个实现陷阱」一节陷阱 1）：JS 这边拿不到
   // 绝对路径，dragover 阶段连路径都没有。所以这里只做两件事：
   // ① 拦住默认行为 —— 没有 preventDefault，WebView2 会直接把窗口导航到被
   //    拖进来的那个文件上，界面就没了；

@@ -4,8 +4,8 @@
 
 1. 解析资源路径（开发期与 `sys._MEIPASS` 两种，只此一处）
 2. 建窗口、把 `Api()` 挂成 js_api
-3. **在 Python 端**注册 drop 监听（§3 陷阱 1：HTML 里写 ondrop 拿不到绝对路径）
-4. 只 `load_html` 一次（§3 陷阱 2：二次加载会清空 DOM 元素表、拖放监听全丢）
+3. **在 Python 端**注册 drop 监听（docs/gui-design.md 的「三个实现陷阱」一节陷阱 1：HTML 里写 ondrop 拿不到绝对路径）
+4. 只 `load_html` 一次（docs/gui-design.md 的「三个实现陷阱」一节陷阱 2：二次加载会清空 DOM 元素表、拖放监听全丢）
 
 界面的一切变化都由 `run_js` 触发，见 `ui.html` 里的 `setView()`。
 """
@@ -45,7 +45,7 @@ def main() -> int:
         height=760,
         min_size=(720, 520),
         # 纸色底：先画这块纯色，等界面渲染完再换上来。不加会在标题栏附近
-        # 闪一下白（§2 代价 2）。和 ui.html 的 --paper 是同一个值。
+        # 闪一下白（docs/gui-design.md 的「为什么是 pywebview」一节所列的代价 2）。和 ui.html 的 --paper 是同一个值。
         background_color="#F1EFE8",
         text_select=False,
     )
@@ -81,7 +81,7 @@ def _register_drop(window) -> None:
         paths = _dropped_paths(event)
         if not paths:
             return
-        # 本期只接一个文件（§3 陷阱 3）：多个同名 basename 时 pywebview 按
+        # 本期只接一个文件（docs/gui-design.md 的「三个实现陷阱」一节陷阱 3）：多个同名 basename 时 pywebview 按
         # unquote 后的文件名匹配并 remove，中途会配错。接第一个是"确定的"。
         window.evaluate_js(
             "window.__onDropPath && window.__onDropPath(%s)" % _js_str(paths[0])
@@ -122,7 +122,12 @@ def _js_str(value: str) -> str:
 
 
 def _debug() -> bool:
-    """开发期开 Inspector；打包后关掉（用户不该看到调试器入口）。"""
+    """开发期开 Inspector；打包后关掉（用户不该看到调试器入口）。
+
+    顺带记一条平台事实（决定 6）：pywebview 把右键菜单、浏览器快捷键、
+    DevTools、状态栏全部绑在同一个 debug 开关上，所以正式包里没有右键。
+    这不是界面漏绑，是平台行为，别当 bug 去修。
+    """
     return bool(getattr(sys, "_MEIPASS", None) is None and "--debug" in sys.argv)
 
 

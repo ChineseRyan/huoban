@@ -9,7 +9,7 @@
    悄悄当通过会让"全绿"变成一句谎话（照 test_fonts.py 的范式）。
 2. **不逐像素比对**。版式的价值在"放得下、看得清、可复现"，不在每条线的
    具体位置；断言像素会把任何微调都变成红。
-3. **确定性是本文件最重要的一条**：§8.5 要求同参数连画两次 PNG 字节相同。
+3. **确定性是本文件最重要的一条**：docs/gui-design.md 的「硬性约束」一节要求同参数连画两次 PNG 字节相同。
    这条钉住的是「有人往模板里塞了 random 或 datetime.now()」。
 
 覆盖的边界：
@@ -17,7 +17,7 @@
 - 自动档既能给版式也能给整幅画，且两半都守约束（2026-10-31 新增）；
 - 54 组（9×6）全部能画出来，且字节级确定性；
 - 对比度审计在 54 组上全过（大文本 3:1 / 正文 4.5:1）；
-- 长书名不丢字（§8.5 硬约束：fit 逐档降字号，永不丢行）；
+- 长书名不丢字（docs/gui-design.md 的「硬性约束」一节：fit 逐档降字号，永不丢行）；
 - 非法 template/theme 抛 CoverError 而不是悄悄换一个；
 - 空书名、超长书名、单字书名、含空格书名的兜底；
 - 换一个：确定性 + 配色轮完会换版式 + 能从任意起点绕回。
@@ -58,7 +58,7 @@ def _png_size(data: bytes) -> tuple[int, int]:
 # 不需要 Pillow 的用例（契约层）
 # --------------------------------------------------------------------------
 def case_templates_and_themes_contract():
-    """两份清单就是对外 id，顺序即索引（§8.6）。加/删元素等于改契约。"""
+    """两份清单就是对外 id，顺序即索引（docs/gui-design.md 的「`gui/cover.py` 接口」一节）。加/删元素等于改契约。"""
     assert cover.TEMPLATES == ["章", "简", "框", "对", "栏", "碑", "印", "夜", "疏"], cover.TEMPLATES
     assert cover.THEMES == ["xuanzhi", "songmo", "qingci", "dianlan", "zheshi", "daiqing"], cover.THEMES
     assert set(cover.ALLOWED) == set(cover.TEMPLATES), "ALLOWED 必须覆盖全部版式"
@@ -85,7 +85,7 @@ def case_auto_pick_deterministic():
 
 
 def case_auto_pick_pool_constraints():
-    """§8.4 的两条池子约束 + 印不进自动池。"""
+    """docs/gui-design.md 的「自动挑选」一节里的两条池子约束 + 印不进自动池。"""
     # 印 一个池都不进：存在感最强，只作手选
     for name in ["书E", "红楼梦", "三体", "关于我在异界开超市这件事"]:
         assert cover.auto_pick(name)[0] != "印", f"印 不该进自动池（{name}）"
@@ -99,7 +99,7 @@ def case_auto_pick_pool_constraints():
 
 
 def case_auto_pick_theme_allowed_by_template():
-    """配色必须是该版式允许的那几个（§8.4：模板 × 配色不是自由组合）。"""
+    """配色必须是该版式允许的那几个（docs/gui-design.md 的「自动挑选」一节：模板 × 配色不是自由组合）。"""
     for name in ["书E", "红楼梦", "三体", "长夜余火", "关于我在异界开超市这件事"]:
         tpl, th = cover.auto_pick(name)
         assert th in cover.ALLOWED[tpl], f"{name} → {tpl}/{th}，配色不在允许池里"
@@ -160,7 +160,7 @@ def case_first_look_is_auto_look():
 
 
 def case_next_choice_deterministic():
-    """「换一个」必须确定性：同起点连点两次拿到同一个下一个（§8.6）。"""
+    """「换一个」必须确定性：同起点连点两次拿到同一个下一个（docs/gui-design.md 的「`gui/cover.py` 接口」一节）。"""
     start = cover.auto_pick("书E")
     a = cover.next_choice("书E", start[0], start[1])
     b = cover.next_choice("书E", start[0], start[1])
@@ -220,7 +220,7 @@ def case_make_cover_all_54():
 
 
 def case_make_cover_deterministic_bytes():
-    """§8.5：同参数连画两次 PNG 字节完全相同 —— 有人塞 random 就会红。"""
+    """docs/gui-design.md 的「硬性约束」一节：同参数连画两次 PNG 字节完全相同 —— 有人塞 random 就会红。"""
     for tpl in ["章", "简", "对", "夜", "印"]:
         th = cover.ALLOWED[tpl][0]
         a = cover.make_cover(**_spec(), template=tpl, theme=th)
@@ -236,7 +236,7 @@ def case_make_cover_seed_follows_title():
 
 
 def case_make_cover_invalid_raises():
-    """非法 template/theme 直接抛，不悄悄换一个（§8.6）。"""
+    """非法 template/theme 直接抛，不悄悄换一个（docs/gui-design.md 的「`gui/cover.py` 接口」一节）。"""
     for kw in [dict(template="不存在"), dict(theme="不存在")]:
         try:
             cover.make_cover(**_spec(), **kw)
@@ -256,7 +256,7 @@ def case_make_cover_too_small_raises():
 
 
 def case_make_cover_long_title_keeps_all_chars():
-    """§8.5：fit 逐档降字号，永不丢字。
+    """docs/gui-design.md 的「硬性约束」一节：fit 逐档降字号，永不丢字。
 
     这条钉的是"字号降到最小仍放不下"的路径：不能像 Calibre 那样静默丢行。
     验证方式不是看像素，而是让 make_cover 把画进去的文本报回来 —— 这里退一步，
@@ -511,10 +511,10 @@ def case_contrast_helper():
 
 
 def case_theme_contrast_baseline():
-    """§8.3 表格里的六套配色，主/次对比度必须真的达标。
+    """docs/gui-design.md 的「六套配色」一节表格里的六套配色，主/次对比度必须真的达标。
 
     这不是重复造轮子：如果有人改了 THEME_TABLE 里的某个色值忘了重算 mu，
-    这条会立刻红。期望值来自 §8.3 的表格，容差 0.05。
+    这条会立刻红。期望值来自 docs/gui-design.md 的「六套配色」一节的表格，容差 0.05。
     """
     expect = {
         "xuanzhi": (14.71, 4.91),
@@ -547,7 +547,7 @@ def case_pillow_missing_degrades():
 def case_cover_fits_epub_cover_slot():
     """产出的 PNG 必须是 RGB（不是 RGBA）——塞进 EPUB 前不依赖调用方转换。
 
-    另外验证它小于常见阅读器的封面尺寸上限（1650×2200，§8.7 提到的那条）。
+    另外验证它小于常见阅读器的封面尺寸上限（1650×2200，docs/gui-design.md 的「顺带补掉一个现存缺口」一节提到的那条）。
     """
     data = cover.make_cover(**_spec(), template="章", theme="xuanzhi")
     # PNG 色彩类型在 IHDR 的第 9 字节：0=灰度 2=RGB 3=调色板 4=灰度+alpha 6=RGBA
@@ -666,7 +666,7 @@ def case_back_cover_all_45_and_deterministic():
 def case_back_cover_invalid_raises_and_degrades():
     """非法版式/配色要抛（调用方写错了）；印面模板没了不抛，但也不产这一页。
 
-    与 make_cover 同一条口径（§8.6 不修补）：悄悄换一款会让人以为点错了按钮。
+    与 make_cover 同一条口径（docs/gui-design.md 的「`gui/cover.py` 接口」一节：不修补）：悄悄换一款会让人以为点错了按钮。
     """
     assert cover.make_back_cover(None) is None, "没给 look 应该返回 None"
     for bad in (
@@ -732,7 +732,7 @@ def case_back_cover_bg_geometry():
 
 
 # --------------------------------------------------------------------------
-# 整幅背景（族 B 十张预设，§8.10）
+# 整幅背景（族 B 十张预设，见 docs/gui-design.md 的「整幅背景」一节）
 # -------------------------------------------------------------------------
 def case_backgrounds_contract():
     """BACKGROUNDS 是对外契约：每张都得有四件套，值都得在枚举里。
@@ -753,7 +753,7 @@ def case_backgrounds_contract():
 
 
 def case_background_pick_deterministic():
-    """同一本书永远从同一张开始（§8.5 确定性），且必须落在可用集合里。"""
+    """同一本书永远从同一张开始（docs/gui-design.md 的「硬性约束」一节：确定性），且必须落在可用集合里。"""
     names = cover.background_names()
     first = cover.pick_background("书E")
     assert first in names, f"pick_background 给出了不可用的 {first!r}"

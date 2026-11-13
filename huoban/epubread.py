@@ -4,7 +4,7 @@
 所以"导入一本 EPUB"最自然的落点就是**产出同一份章节树**。之后的流程
 （改字、调排版、重新打包）与 TXT 那条线完全一样，不需要两套渲染器。
 
-设计边界（docs/gui-design.md §12）：
+设计边界（docs/gui-design.md 的「EPUB 导入」一节）：
 - **重排，不是转换**：走章节树重新决定每段是什么（正文/标题/图说/脚注），
   字符级格式（加粗、斜体、ruby 注音、字号）一律丢弃；
 - **章节边界以 NCX/nav 为准**，不信正文里的大字标题 —— 盗版书的"标题"
@@ -51,7 +51,7 @@ _MAGIC_PNG = b"\x89PNG\r\n\x1a\n"
 _MAGIC_JPG = b"\xff\xd8\xff"
 _MAGIC_GIF = b"GIF8"
 
-# 装饰图阈值（§12.5）：同一张图全书被引用超过这么多次，就认为它不是内容，
+# 装饰图阈值（docs/gui-design.md 的「三类图片判定」一节）：同一张图全书被引用超过这么多次，就认为它不是内容，
 # 而是"每章顶部的 logo""脚注引用图标"这类排版装饰。
 #
 # 这个数 2026-10-28 用 349 本真 EPUB（其中 91 本带图，共 3,157 张图次引用）实测过：
@@ -64,7 +64,7 @@ _MAGIC_GIF = b"GIF8"
 # 留下装饰图的代价是一本书里多几张废图，误删插图的代价是内容没了 —— 不对等。
 DECORATIVE_THRESHOLD = 10
 
-# 前言区的标题关键词（§12.7 前附）。只在前缀位置生效：一旦切出了第一
+# 前言区的标题关键词（docs/gui-design.md 的「章节切分」一节里的「前附」）。只在前缀位置生效：一旦切出了第一
 # 个正文章节，后面再出现"序"字样的标题就一律当章节（番外里常有"序"）。
 _FRONT_WORDS = (
     "版权", "扉页", "制作说明", "内容简介", "简介", "前言",
@@ -73,7 +73,7 @@ _FRONT_WORDS = (
 # 目录页：整页都是链接，重排后没有意义，直接丢弃（不占章节、不进前言）。
 _TOC_WORDS = ("目录", "目次", "contents", "tableofcontents")
 
-# 分片合并时允许剥掉的尾部标记（§12.7）：「第二章 xxx（上）」与「（中）」
+# 分片合并时允许剥掉的尾部标记（docs/gui-design.md 的「章节切分」一节）：「第二章 xxx（上）」与「（中）」
 # 属于同一章。只认括号里是这些字/数字的，正文里合法的括号（如"（笑）"）不剥。
 _PIECE_SUFFIX = re.compile(
     r"[（(]\s*(?:[一二三四五六七八九十百零〇0-9]{1,3}|上|中|下|全|续|完|终)\s*[）)]\s*$"
@@ -184,7 +184,7 @@ def _ext_from_magic(data: bytes) -> str | None:
 
 
 def _image_size(data: bytes) -> tuple[int, int]:
-    """从图片字节里读宽高（§12.4）。读不出来返回 (0, 0)，绝不抛异常。
+    """从图片字节里读宽高（docs/gui-design.md 的「尺寸必须在解析时拿到」一节）。读不出来返回 (0, 0)，绝不抛异常。
 
     为什么不用 Pillow：它是可选依赖，打包/导入这条主路径不能因为
     "没装 Pillow"就整体不可用。三种格式的尺寸都在文件头里，标准库够了：
@@ -1334,7 +1334,7 @@ def _drop_duplicate_heading(items: list[list], title: str) -> list[list]:
 
 
 def _merge_pieces(chapters: list[Chapter]) -> tuple[list[Chapter], int, int]:
-    """相邻同主干的分片合并（§12.7），返回 (合并后的章节, 组合数, 合并前片数)。
+    """相邻同主干的分片合并（docs/gui-design.md 的「章节切分」一节），返回 (合并后的章节, 组合数, 合并前片数)。
 
     为什么要求"相邻"：不相邻的同名章（"第一章"出现在两卷里）合并会把
     两段隔了几百章的内容缝到一起。相邻 + 同主干 + 同层级（都是章）才合。
@@ -1470,7 +1470,7 @@ def _import(zf: zipfile.ZipFile, src: Path, image_dir) -> EpubImport:
             if resolved and item.media.startswith("image/"):
                 cover_name = resolved
             elif resolved and (item.media.endswith("xhtml+xml") or resolved.lower().endswith((".xhtml", ".html", ".htm"))):
-                # 封面指向一个页面：从页面里剥出第一张位图（§12.5 的 SVG 包位图写法）。
+                # 封面指向一个页面：从页面里剥出第一张位图（docs/gui-design.md 的「三类图片判定」一节里的 SVG 包位图写法）。
                 cover_name = _first_image_in_doc(zf, resolved, opf.base, resolve) or ""
     if not cover_name:
         # 兜底：manifest 里 properties="cover-image" 的那张

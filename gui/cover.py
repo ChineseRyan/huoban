@@ -13,10 +13,10 @@
    这里 `make_cover(..., audit=True)` 直接在同一趟里断言，失败就抛 ValueError，
    因为"封面字看不清"是必须当场发现的缺陷，不该等到跑评审脚本。
 
-对外接口（§8.6）：
+对外接口（docs/gui-design.md 的「`gui/cover.py` 接口」一节）：
     TEMPLATES / THEMES / auto_pick / auto_look / make_cover / make_back_cover / next_choice
 
-版式与配色的对应关系、池子约束都在 §8.4；这里只实现，不重新设计。
+版式与配色的对应关系、池子约束都在 docs/gui-design.md 的「自动挑选」一节；这里只实现，不重新设计。
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ except Exception:  # noqa: BLE001
     ImageFilter = None
     ImageFont = None
 
-# 尺寸：3:4 海报，1200×1600 是 §8.5 定的量级（单张 32–101KB、约 141ms）
+# 尺寸：3:4 海报，1200×1600 是 docs/gui-design.md 的「硬性约束」一节定的量级（单张 32–101KB、约 141ms）
 W_DEFAULT, H_DEFAULT = 1200, 1600
 
 # 页边距（占位按比例给，支持非默认画布）
@@ -97,7 +97,7 @@ _FONT_FALLBACKS = {
 
 
 class CoverError(ValueError):
-    """封面生成的参数或绘制缺陷。§8.6：非法 template/theme 直接抛，不做修补。"""
+    """封面生成的参数或绘制缺陷。docs/gui-design.md 的「`gui/cover.py` 接口」一节：非法 template/theme 直接抛，不做修补。"""
 
 
 # --------------------------------------------------------------------------
@@ -145,7 +145,7 @@ _TEXTURE_LOCK = threading.Lock()
 # 程序化噪声负责（每张封面本来就在画），素材不需要承担高频。目视对比条上
 # 150×200/3 级与原始全分辨率在 1200×1600 上几乎分不出，后者只是更"脏"。
 # 为什么不用 JPEG：解码必须跨机器逐字节一致，JPEG 依赖 libjpeg 版本会让成品
-# 哈希漂（§8.5 确定性是硬要求）。
+# 哈希漂（docs/gui-design.md 的「硬性约束」一节：确定性是硬要求）。
 _TEXTURE_WORK = (150, 200)   # 工作尺寸（按 1200×1600 画布定标，其它尺寸等比）
 _TEXTURE_LEVELS = 3          # 量化级数
 
@@ -206,7 +206,7 @@ def _load_texture(name: str, w: int, h: int):
 
 
 # --------------------------------------------------------------------------
-# 六套配色（§8.3，对比度已实测；改色必须重跑 audit）
+# 六套配色（docs/gui-design.md 的「六套配色」一节，对比度已实测；改色必须重跑 audit）
 # --------------------------------------------------------------------------
 THEME_TABLE: dict[str, dict] = {
     # mu（次要信息色）按 WCAG 4.5:1 反推校准过，不是凭感觉取的灰
@@ -222,7 +222,7 @@ THEMES = ["xuanzhi", "songmo", "qingci", "dianlan", "zheshi", "daiqing"]
 
 TEMPLATES = ["章", "简", "框", "对", "栏", "碑", "印", "夜", "疏"]
 
-# §8.4：版式 → 允许的配色。纸面五款只配浅色（`对` 额外允许松墨）；
+# 版式 → 允许的配色（见 docs/gui-design.md 的「自动挑选」一节）。纸面五款只配浅色（`对` 额外允许松墨）；
 # `夜` 只配深色；`简` 任意；`印` 底色就是强调色，凭色相挑，不参与自动池。
 ALLOWED: dict[str, list[str]] = {
     "章": ["xuanzhi", "qingci", "zheshi", "daiqing"],
@@ -236,7 +236,7 @@ ALLOWED: dict[str, list[str]] = {
     "疏": ["xuanzhi", "qingci", "zheshi", "daiqing"],
 }
 
-# §8.4：按书名长度筛版式。两条池子约束写在这里：
+# 按书名长度筛版式（见 docs/gui-design.md 的「自动挑选」一节）。两条池子约束写在这里：
 #   `夜` 只进 SHORT/MID（十几个字的大字距横排会糊成一片）
 #   `章` 不进 LONG（学术单块版式折成三行就散了）
 #   `印` 一个池都不进：存在感最强，只作手选的「签名款」
@@ -254,7 +254,7 @@ def available() -> bool:
 
 
 # --------------------------------------------------------------------------
-# 自动挑选（§8.4：种子固定，同一本书永远同一个样子）
+# 自动挑选（docs/gui-design.md 的「自动挑选」一节：种子固定，同一本书永远同一个样子）
 # --------------------------------------------------------------------------
 def _pool_for(title: str) -> list[str]:
     n = len(title.replace(" ", ""))
@@ -285,7 +285,7 @@ def auto_pick(title: str) -> tuple[str, str]:
 def next_choice(title: str, template: str, theme: str, step: int = 1) -> tuple[str, str]:
     """「换一个」：先在当前版式的允许配色内循环，配色轮完再换池内下一款版式。
 
-    §8.6 要求仍然确定性 —— 同一个起点连点两次拿到同一个下一个，所以这里
+    docs/gui-design.md 的「`gui/cover.py` 接口」一节要求仍然确定性 —— 同一个起点连点两次拿到同一个下一个，所以这里
     不用 random，只做确定性的环形推进。
     """
     if template not in ALLOWED:
@@ -354,7 +354,7 @@ class _Canvas:
     def C(self, h, a: int = 255):
         """直接画在画布上的颜色：先按当前底色预混合成不透明色。
 
-        关键点（§8.5）：PIL 的 ImageDraw 对 RGBA 画布传半透明色是「替换像素」
+        关键点（docs/gui-design.md 的「硬性约束」一节）：PIL 的 ImageDraw 对 RGBA 画布传半透明色是「替换像素」
         而不是「叠加」，存 PNG 转 RGB 时会按黑色底压平，细线和淡色块会黑成
         一大块 —— 所以一律自己混合，画布始终保持 RGB。
         """
@@ -690,7 +690,7 @@ def tw(f, s: str, tr: float = 0) -> float:
 
 def fit(text: str, kind: str, wght, maxw: float, maxh: float, size0: float,
         min0: float = 54, tr_ratio: float = 0.0, lead: float = 1.06):
-    """逐档 0.94 降字号直到放得下。永不丢行（§8.5 硬约束）。"""
+    """逐档 0.94 降字号直到放得下。永不丢行（docs/gui-design.md 的「硬性约束」一节）。"""
     size = size0
     while size >= min0:
         f = F(kind, size, wght)
@@ -813,7 +813,7 @@ def footer(d, cv: _Canvas, spec: dict, y):
 
 
 # --------------------------------------------------------------------------
-# 九款版式（§8.2）
+# 九款版式（docs/gui-design.md 的「九款版式」一节）
 # --------------------------------------------------------------------------
 def t_zhang(spec, th, seed, cv):
     """章 · 学术横排：细线分区 + 大字书名"""
@@ -1139,7 +1139,7 @@ _TEMPLATE_FUNCS = {
 
 
 # --------------------------------------------------------------------------
-# 整幅背景（族 B：自带的"万能封面预设"，§8.10）
+# 整幅背景（族 B：自带的"万能封面预设"，见 docs/gui-design.md 的「整幅背景」一节）
 # --------------------------------------------------------------------------
 # 这九张不是纹理，是**整幅背景画**：画作压在一条边上，其余是大片留白。
 # 所以它们不能走底纹那条路（那是给纯色底加质感），得单独一套：底图铺满、
@@ -1212,7 +1212,7 @@ def _load_background(name: str, w: int, h: int):
 
 
 def pick_background(title: str, step: int = 0) -> str:
-    """确定性起点：同一本书永远从同一张开始（§8.5 确定性）。"""
+    """确定性起点：同一本书永远从同一张开始（docs/gui-design.md 的「硬性约束」一节：确定性）。"""
     names = background_names()
     if not names:
         raise CoverError("这台机器上没有背景素材（gui/assets/backgrounds/ 是空的）")
@@ -1309,7 +1309,7 @@ def all_looks(title: str) -> list[dict]:
     # gap 按实际数量算（36 款版式 / 9 张画 = 每 4 款夹一张），不写死 6 ——
     # 写死会在素材数量变化时留下"末尾连着三张背景"这种难看的收尾（实测过）。
     # 用整数比较推进，不用浮点累加：浮点会让同一份数据在不同机器上排出
-    # 不同顺序，而"同一本书永远同一起点"是硬要求（§8.5）。
+    # 不同顺序，而"同一本书永远同一起点"是硬要求（docs/gui-design.md 的「硬性约束」一节）。
     out: list[dict] = []
     nb, nt = len(bgs), len(tpls)
     gap = max(1, (nt + nb - 1) // nb) if nb else 0
@@ -1481,7 +1481,7 @@ _LOCK = threading.RLock()
 
 
 # --------------------------------------------------------------------------
-# 对比度审计（§8.5：读绘制现场，不读成品像素）
+# 对比度审计（docs/gui-design.md 的「硬性约束」一节：读绘制现场，不读成品像素）
 # --------------------------------------------------------------------------
 def _audit(text_log, template: str) -> None:
     """大文本（≥24px）3:1，正文 4.5:1。任一不达标抛 CoverError。"""
@@ -1558,7 +1558,7 @@ def auto_look(title: str) -> dict:
 def next_choice(title: str, template: str, theme: str, step: int = 1) -> tuple[str, str]:
     """「换一个」：先在当前版式的允许配色内循环，配色轮完再换池内下一款版式。
 
-    §8.6 要求仍然确定性 —— 同一个起点连点两次拿到同一个下一个，所以这里
+    docs/gui-design.md 的「`gui/cover.py` 接口」一节要求仍然确定性 —— 同一个起点连点两次拿到同一个下一个，所以这里
     不用 random，只做确定性的环形推进。
     """
     if template not in ALLOWED:
@@ -1581,7 +1581,7 @@ def _make_cover_locked(title: str, author: str, subtitle: str, source: str,
     th = THEME_TABLE[theme]
     cv = _Canvas(width, height, th)
     spec = {"title": title, "author": author, "subtitle": subtitle, "source": source}
-    # seed 由书名派生：噪点纹理逐张不同，但同一本书恒定（§8.5 确定性）
+    # seed 由书名派生：噪点纹理逐张不同，但同一本书恒定（docs/gui-design.md 的「硬性约束」一节：确定性）
     seed = int(hashlib.sha256((title + "|" + author).encode("utf-8")).hexdigest()[:8], 16)
     if background:
         img = _draw_background_cover(spec, background, cv)
@@ -1610,7 +1610,7 @@ def make_cover(title: str, author: str = "", subtitle: str = "", source: str = "
     """画一张封面 PNG。Pillow 不在时返回 None（调用方回落"无封面"）。
 
     template / theme 传 None 走 auto_pick；传值即手选，非法值直接 ValueError
-    （§8.6：不做修补 —— 悄悄换成另一款版式会让用户以为自己点错了按钮）。
+    （docs/gui-design.md 的「`gui/cover.py` 接口」一节：不做修补 —— 悄悄换成另一款版式会让用户以为自己点错了按钮）。
 
     `background` 是另一条路：给一张"整幅背景画"的名字（`BACKGROUNDS` 的键），
     底图铺满、文字放进留白区，模板与配色都不参与（配色由底图自己决定）。

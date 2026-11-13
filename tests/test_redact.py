@@ -136,7 +136,7 @@ def case_redact_replaces_file_with_deterministic_code():
 def case_redact_wipes_dropped_lines_text():
     """全量删除清单（dropped_lines）里的 text 也是真书正文，必须一起换形状。
 
-    这一桶是 §7 adjust 实装时新加的：复核界面要列全量勾选项，所以每条都带
+    这一桶是 docs/gui-design.md 的「adjust 接口」实装时新加的：复核界面要列全量勾选项，所以每条都带
     "前 60 字"。它不进 markdown，只走 --json，正是最容易漏掉脱敏的那种字段 ——
     漏了就等于 --redact 的输出里直接摆着正文。
     """

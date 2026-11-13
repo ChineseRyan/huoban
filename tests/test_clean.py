@@ -3056,7 +3056,7 @@ def case_story_titles_ignored_when_book_has_chapters() -> None:
     assert "中间的小标题" in "".join(_bodies(res.book.chapters[0])), "被拒的行要留在正文里"
 
 # ---------------------------------------------------------------------------
-# 十二、人工调整（adjust，docs/gui-design.md §7）
+# 十二、人工调整（adjust，docs/gui-design.md 的「adjust 接口」一节）
 # ---------------------------------------------------------------------------
 
 
@@ -3076,7 +3076,7 @@ def _ad_text() -> str:
 
 
 def case_adjust_none_is_same_as_absent() -> None:
-    """adjust=None 必须和没有这个参数时一模一样 —— §7 的第一条硬要求。
+    """adjust=None 必须和没有这个参数时一模一样 —— docs/gui-design.md 的「adjust 接口」一节的第一条硬要求。
 
     比的是**落盘产物**：章节树 JSON、干净 TXT、清洗报告 markdown。
     报告 dict 里会多出 dropped_lines / adjust 两个键（给复核界面用的），
@@ -3180,7 +3180,7 @@ def case_adjust_merge_break_keeps_lines_apart() -> None:
 
 
 def case_adjust_same_twice_identical() -> None:
-    """同一份 adjust 跑两遍，结果必须一致（§7 的第四条硬要求）。"""
+    """同一份 adjust 跑两遍，结果必须一致（docs/gui-design.md 的「adjust 接口」一节的第四条硬要求）。"""
     from huoban.render import render_txt
 
     adjust = {"protect_lines": [3], "merge_breaks": [2]}
@@ -4108,7 +4108,7 @@ _CASES = [
     # 短篇集分篇标题（整本没有章节标记时才启用）
     case_story_titles_split_chapterless_collection,
     case_story_titles_ignored_when_book_has_chapters,
-    # 人工调整（adjust，docs/gui-design.md §7）
+    # 人工调整（adjust，docs/gui-design.md 的「adjust 接口」一节）
     case_adjust_none_is_same_as_absent,
     case_adjust_protect_ad_line_keeps_it,
     case_adjust_protect_toc_marker_keeps_text_without_chapter,

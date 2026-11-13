@@ -376,7 +376,7 @@ def case_framed_heading_keeps_its_number() -> None:
 
 
 def case_v1_tree_reserializes_unchanged() -> None:
-    """§12.10：旧 v1 章节树读入后重新序列化，**除 version 外**逐字节不变。
+    """docs/gui-design.md 的「EPUB 导入」一节验收要求：旧 v1 章节树读入后重新序列化，**除 version 外**逐字节不变。
 
     为什么不是"逐字节"：schema 升到 2 了，to_dict 写出的 version 字段必须是
     新的（否则下次读入会以为这是 v1 树）。除这一处以外一个字节都不许动 ——

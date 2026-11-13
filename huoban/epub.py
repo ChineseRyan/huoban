@@ -466,7 +466,7 @@ def _render_paragraphs(
     return "".join(out), count
 
 
-# 图片按宽高比分流成四档（§12.2）。阈值是设计文档钉死的，别随手改：
+# 图片按宽高比分流成四档（docs/gui-design.md 的「插图排版」一节）。阈值是设计文档钉死的，别随手改：
 # 竖图（漫画/人像/封面式插页）给 60%，方图 70%，宽横图 90%，极端横条 100%。
 _IMAGE_TALL = 0.85
 _IMAGE_WIDE = 1.6

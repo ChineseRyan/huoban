@@ -62,7 +62,7 @@ def _load_name_map(path: str | None) -> dict[str, str] | None:
 
 
 def _load_adjust(value: str | None) -> dict | None:
-    """读人工调整（docs/gui-design.md §7 的 adjust）。
+    """读人工调整（docs/gui-design.md 的「adjust 接口」一节）。
 
     两种写法：直接给 JSON 文本，或者给一个装着 JSON 的文件路径。
     以 "{" 开头当 JSON 文本，否则当路径 —— 复核界面把勾选状态写成临时文件
@@ -362,7 +362,7 @@ def _print_reflow_summary(
     title_disp = shape(report["title"]) if masked else (report["title"] or "未命名")
     author_disp = shape(report["author"]) if masked else (report["author"] or "（未识别）")
     print(f"输入  {src_disp}", file=out)
-    # "片 → 章"只算章，不含卷：合并只发生在章这一层，卷不参与（§12.7 要求
+    # "片 → 章"只算章，不含卷：合并只发生在章这一层，卷不参与（docs/gui-design.md 的「章节切分」一节要求
     # 报出「合并 285 组：2240 片 → 620 章」这种能对上原书的数字）。
     merged_chapters = report["chapters"] - report["volumes"]
     print(
@@ -531,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         # 与清洗阶段抛出的 adjust 错误用同一句话、同一个返回码：用户看到的
         # "人工调整有问题"只该有一种口径，不该因为错在读文件、解析 JSON
-        # 还是错在键名而变成两套说法（docs/gui-design.md §7.3 就写了这一条）。
+        # 还是错在键名而变成两套说法（docs/gui-design.md 的「两类错误，两种处理」一节就写了这一条）。
         print(f"人工调整有问题：{exc}")
         return 2
 

@@ -35,7 +35,7 @@ from .diagnose import cn_to_int, match_chapter, strip_frame
 # v1 → v2（EPUB 导入 G6）：Paragraph 新增 caption / width / height 三个字段，
 # 只在 kind="image" 的段落上出现。这是**纯增量**：v1 的章节树按 v2 读入后
 # 一个字段都不会变（from_dict 接受 1 和 2 两个主版本），to_dict 也只对 image
-# 段写新字段 —— 旧 v1 文件重新序列化后除 version 外逐字节不变（§12.10）。
+# 段写新字段 —— 旧 v1 文件重新序列化后除 version 外逐字节不变（见 docs/gui-design.md 的「EPUB 导入」一节里的验收要求）。
 SCHEMA_VERSION = "2"
 
 # 段落类型。渲染层按这个决定排版，清洗层按这个标注，两边共用同一份取值。
@@ -238,7 +238,7 @@ def chapter_from_title(title: str, start_line: int = 0) -> Chapter:
 def _paragraph_to_dict(p: Paragraph) -> dict:
     d = {"text": p.text, "kind": p.kind}
     # 三个新字段只在 image 段上写：普通段落多出 "caption": "" 会让
-    # v1 的旧文件重新序列化后字节发生变化（§12.10 要求除 version 外不变）。
+    # v1 的旧文件重新序列化后字节发生变化（docs/gui-design.md 的「EPUB 导入」一节验收要求：除 version 外不变）。
     if p.kind == "image":
         d["caption"] = p.caption
         d["width"] = p.width

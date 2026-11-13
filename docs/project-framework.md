@@ -26,7 +26,7 @@
                        ├─ about_seal_dark.png    关于页印面·深色（印色 #D65E4D，264×264 RGBA）
                        └─ about_seal_mask.png    手 P 透明底母版（ui.html 内嵌 base64 的独立留存）
 CLI 只有四个子命令：`diagnose` / `clean` / `epub` / `reflow`（EPUB 导入）。
-GUI 是第五条入口，设计权威是 `docs/gui-design.md`（§4 视图数、§5 js_api 方法表以代码为准）。
+GUI 是第五条入口，设计权威是 `docs/gui-design.md`（视图数、js_api 方法表以代码为准）。
 
 ## 运行方式
 
