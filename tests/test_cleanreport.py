@@ -64,7 +64,7 @@ def case_full() -> None:
     out = render_clean_markdown(_base_report())
     for header in ("概览", "行数", "删除", "碎行合并", "修复", "章节与前后附文", "样例", "警告", "下一步"):
         assert header in out, header
-    # 铁律 1 必须在报告里显眼地写出来
+    # 输入只读必须在报告里显眼地写出来
     assert "原始文件未改动" in out, "缺少只读声明"
     # 摘要三要素
     assert "messy.txt" in out
@@ -514,15 +514,6 @@ _CASES = [
     case_pure_no_mutation,
     case_no_azw3_in_next_steps,
 ]
-
-
-def test_all_cases() -> None:
-    """pytest 入口：把全部 case 跑一遍，任一失败就抛 AssertionError。
-
-    直跑入口是 main()；这个函数只是让 `pytest tests/` 也能收集到，两不耽误。
-    """
-    for c in _CASES:
-        c()
 
 
 def main() -> int:

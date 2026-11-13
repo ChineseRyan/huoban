@@ -60,7 +60,7 @@ MIT 许可证，见 [LICENSE](LICENSE)。
 ## 给想改代码的人
 
 - 架构、代码约定与测试口径在 [AGENTS.md](AGENTS.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
-- 测试逐个脚本直跑（`python tests/test_clean.py` … 看末行 `N/M passed`），别用 pytest；端到端冒烟是 `python tools/smoke_test.py`。
+- 测试逐个脚本直跑（`python tests/test_clean.py` … 看末行 `N/M passed`）；端到端冒烟是 `python tools/smoke_test.py`。
 - 桌面界面的设计说明在 [docs/gui-design.md](docs/gui-design.md)（部分章节以代码为准）。
 
 ## 许可证

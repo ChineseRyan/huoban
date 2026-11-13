@@ -5,7 +5,7 @@
 apply_adjust 的形状校验）都能在无窗口环境下直接跑 —— 这几处正是最容易悄悄
 改坏的地方，所以必须有用例钉住。
 
-跑法：`python tests/test_gui.py`（本项目禁 pytest，会假绿）。
+跑法：`python tests/test_gui.py`（`pytest` 收集不到这些用例，只能直跑）。
 """
 
 from __future__ import annotations

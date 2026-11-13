@@ -354,7 +354,7 @@ def cmd_map(argv: list[str]) -> int:
 
 
 def cmd_twin(argv: list[str]) -> int:
-    """产出一本孪生本。输入只读（铁律 1）。"""
+    """产出一本孪生本。输入只读。"""
     ap = argparse.ArgumentParser(prog="mask.py twin", description="生成结构同构的影子语料")
     ap.add_argument("path", help="原书 TXT（只读）")
     ap.add_argument("-o", "--out", required=True, help="孪生本输出路径")

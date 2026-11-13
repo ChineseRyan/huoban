@@ -32,7 +32,7 @@ GUI 是第五条入口，设计权威是 `docs/gui-design.md`（视图数、js_a
 
 - Python 包是仓库根下的 `huoban/`，运行方式 `python -m huoban diagnose 书.txt`。
 
-### 测试怎么跑（别用 pytest）
+### 测试怎么跑
 **逐个脚本直跑**，看末行 `N/M passed`；端到端冒烟：`python tools/smoke_test.py`。
 基线条数以实跑为准，不要抄进文档。
 

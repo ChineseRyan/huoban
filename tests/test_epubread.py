@@ -1,6 +1,6 @@
 """epubread.py 的测试：EPUB → 章节树（G6 导入）。
 
-照 tests/test_epub.py 的风格：不用 pytest，一个 case 一个函数，纯 assert，
+照 tests/test_epub.py 的风格：逐个直跑，一个 case 一个函数，纯 assert，
 直接 python tests/test_epubread.py 跑。只断言契约（章节切分、段落类型、
 图片分流、caption 归属、报告字段、报错语义），不断言内部实现细节。
 

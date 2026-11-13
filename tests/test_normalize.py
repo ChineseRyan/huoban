@@ -1,6 +1,6 @@
 """normalize.py 的用例。直接跑：python tests/test_normalize.py
 
-风格照抄 tools/smoke_test.py：不用 pytest，一个 case 一个 assert，
+风格照抄 tools/smoke_test.py：逐个直跑，一个 case 一个 assert，
 末尾打印 ok/FAIL 汇总并设置退出码。全部是假数据，不读任何真实书。
 
 覆盖：零宽清除、缩进保留、省略号各写法、中英混排空格、全角数字、

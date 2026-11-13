@@ -878,7 +878,7 @@ def case_gbk_bytes_decoded() -> None:
 
 
 def case_clean_file_never_touches_input() -> None:
-    """铁律第一条：输入文件的字节和 mtime 都不能变。"""
+    """输入只读：输入文件的字节和 mtime 都不能变。"""
     d = _tmpdir()
     src = d / "in.txt"
     src.write_bytes("第一章 开始\n\n正文。\n".encode("utf-8"))
@@ -2873,7 +2873,7 @@ def case_hardwrap_para_head_candidate_kept() -> None:
     #264 3 次，全部是**段首**真章标题（前一行短、收句、中间还有空行），
     按段首拒等于把真章吃掉（旧版不看段首/段中，实测 #106 2 章变 1 章、
     #264 12 章变 9 章）。段首那部分需要读懂"这一行是不是正文里引用章节号"，
-    属语义判断，按铁律 3「规则优先，AI 兜底」留给 M4，这里只计数不动树。
+    属语义判断，规则判不准就交给人（规则优先，AI 兜底），留给 M4，这里只计数不动树。
     """
     chunk = _pad("第三章里写的那些话后来一一应验了")
     res = clean_text(
@@ -4147,12 +4147,6 @@ _CASES = [
     case_framed_chapter_titles_are_cut_cleanly,
     case_pure_decorative_frame_is_still_a_separator,
 ]
-
-
-def test_all_cases() -> None:
-    """pytest 入口。"""
-    for c in _CASES:
-        c()
 
 
 def main() -> int:

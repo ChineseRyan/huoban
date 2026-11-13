@@ -431,57 +431,6 @@ def case_v1_tree_reserializes_unchanged() -> None:
     assert to_dict(book)["front_matter"] == v1["front_matter"]
 
 
-# ---------- pytest 兼容层 ----------
-# 用例本体统一叫 case_*（照 tools/smoke_test.py 的风格，脚本直跑时按顺序执行）。
-# 但本机恰好装了 pytest，验收要求 "python -m pytest" 也要全绿，
-# 而 pytest 只收集 test_* 开头的名字，所以下面给每条用例挂一个薄壳。
-# 没装 pytest 时，这几个函数只是没人调用的普通函数，不影响 "python tests/test_model.py"。
-
-
-def test_roundtrip() -> None:
-    case_roundtrip()
-
-
-def test_two_levels() -> None:
-    case_two_levels()
-
-
-def test_validate_problems() -> None:
-    case_validate_problems()
-
-
-def test_validate_missing_number() -> None:
-    case_validate_missing_number()
-
-
-def test_validate_volume_restart() -> None:
-    case_validate_volume_restart()
-
-
-def test_validate_volume_may_be_empty() -> None:
-    case_validate_volume_may_be_empty()
-
-
-def test_validate_duplicate_volume_titles() -> None:
-    case_validate_duplicate_volume_titles()
-
-
-def test_stats() -> None:
-    case_stats()
-
-
-def test_save_load_identical() -> None:
-    case_save_load_identical()
-
-
-def test_version_guard() -> None:
-    case_version_guard()
-
-
-def test_v1_tree_reserializes_unchanged() -> None:
-    case_v1_tree_reserializes_unchanged()
-
-
 def main() -> int:
     cases = [
         case_roundtrip,

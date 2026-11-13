@@ -1,6 +1,6 @@
 """render.py 的测试：章节树 → 干净 TXT。
 
-照 tools/smoke_test.py 的风格：不用 pytest，一个 case 一个函数，纯 assert，
+照 tools/smoke_test.py 的风格：逐个直跑，一个 case 一个函数，纯 assert，
 直接 python tests/test_render.py 跑。只断言排版契约（缩进、空行、行尾、结尾换行、
 幂等），不断言内部实现细节。
 

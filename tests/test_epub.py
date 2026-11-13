@@ -1,6 +1,6 @@
 """epub.py 的测试：章节树 → EPUB3 包。
 
-照 tests/test_render.py 的风格：不用 pytest，一个 case 一个函数，纯 assert，
+照 tests/test_render.py 的风格：逐个直跑，一个 case 一个函数，纯 assert，
 直接 python tests/test_epub.py 跑。只断言契约（包结构、OPF 元数据、目录形态、
 正文元素、确定性），不断言内部实现细节。
 

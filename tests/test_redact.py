@@ -458,11 +458,6 @@ _CASES = [
 ]
 
 
-def test_all_cases():
-    for fn in _CASES:
-        fn()
-
-
 def main() -> int:
     failed = 0
     for fn in _CASES:

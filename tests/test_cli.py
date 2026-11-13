@@ -297,12 +297,6 @@ _CASES = [
 ]
 
 
-def test_all_cases() -> None:
-    """pytest 入口。"""
-    for c in _CASES:
-        c()
-
-
 def main() -> int:
     failed = 0
     for c in _CASES:

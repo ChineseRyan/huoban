@@ -103,4 +103,4 @@
 2. **在本文档登记一行**：文件名、用途、被哪段程序读、由什么生成。
 3. **有母版的一并入库存档**（同一份字节），别只留在 `_shot/` 这类被忽略的目录里。
 4. 改完跑对应测试：`python -B tests/test_cover.py`（封面）/ `python -B tests/test_gui.py`（界面），
-   再 `python -B tools/smoke_test.py`。逐个直跑，不用 pytest。
+   再 `python -B tools/smoke_test.py`。逐个直跑。

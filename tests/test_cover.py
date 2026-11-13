@@ -1,6 +1,6 @@
 """封面的测试：gui/cover.py 的九款版式 × 六套配色。
 
-照 tests/test_fonts.py 的风格：不用 pytest，一个 case 一个函数，纯 assert，
+照 tests/test_fonts.py 的风格：逐个直跑，一个 case 一个函数，纯 assert，
 直接 python tests/test_cover.py 跑。只断言契约，不断言每一条线的坐标。
 
 几处刻意的设计：
