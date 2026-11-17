@@ -48,6 +48,13 @@ from huoban.model import validate_items as validate_items
 # 输入上限：50 MB。再大就别在界面里等了，先去命令行跑（docs/gui-design.md 的「验收」一节第 5 条）。
 MAX_INPUT_BYTES = 50 * 1024 * 1024
 
+# 清洗中途的取消检查点间隔：每这么多步查一次 `job.cancel_requested`
+# （todo/0.3.0.md 的「清洗中途检查点」）。取 2000 是量出来的折中：
+# 20 万行的书约 100 次检查，点下去在下一次回调内就停（毫秒级）；
+# 而回调本身只做取模与读一个布尔，不拖慢清洗。
+# 别把它调成 1：那样每行都要进一次 Python 函数，白付几十万次调用。
+CANCEL_CHECK_LINES = 2000
+
 # 两条入口共用同一条产线（docs/gui-design.md 的「EPUB 导入」一节）：TXT 走清洗，EPUB 走导入（`epubread`）。
 # 导入这条路不跑 clean.py —— 章节边界由 OPF spine + nav/NCX 白送，
 # 目录块与广告行基本不存在，再洗一遍只会把正常排版当脏数据。
@@ -215,11 +222,16 @@ class Job:
     payload: dict | None = None
     thread: threading.Thread | None = None
     stage: str = "import"
-    # 用户点了取消。worker 没法被真正掐断（clean_file 是一次同步调用，
-    # 中途没有检查点），所以只立旗子，由 worker 在写盘前后各看一眼：
+    # 用户点了取消。线程本身掐不断（Python 没有可靠的跨平台做法），所以立旗子，
+    # 由 worker 在三个地方各自看一眼：**清洗中途的检查点**（每 CANCEL_CHECK_LINES 行，
+    # todo/0.3.0.md 的「清洗中途检查点」）、写盘之前、写盘之后。
     # 写盘前看到 = 一个字节都不写；写盘后才看到 = 把刚产出的东西收进回收站。
     cancel_requested: bool = False
     cancelled: bool = False
+    # 取消现在能真的早点生效：`clean_file` 有了检查点，worker 每 CANCEL_CHECK_LINES
+    # 行查一次旗子（见 _run_import 里的 _step）。这里只记「停在哪」，给技术细节
+    # 与日志用 —— **不上界面**（决定 7：界面不显示进度）。
+    last_step: str = ""
     # 这次失败是"默认拒收、但用户可以硬来"的那一类（目前只有整本糊行）。
     # 界面看到它就把错误页的「仍然继续」亮出来，点了走 force_import 重跑。
     can_continue: bool = False
@@ -1321,6 +1333,73 @@ def _detail(session, key: str, index: int) -> dict:
     return fn(session, rows[index])
 
 
+# ---------- 关于页外链（`todo/0.3.0.md` 的「【设计】“关于”页重设计」· 外链通道方案 C） ----------
+#
+# 放行范围写死在 Python 侧、逐字比对：前端传什么都不能把它放宽。
+# 三条地址是开发者 2026-11-14 钉死的正式地址（小红书个人主页 / 活板项目页 / 爱发电主页）。
+# 不许改成「按域名放行」或「前端传白名单」—— 条目里的坑就写在这两条上。
+#
+# 地址只有这一份：`about_links()` 供界面渲染，`open_url()` 拿同一份做白名单。
+# 前端不写死 http 串（单文件零外链那条静态断言要靠这个保持零），所以键名由界面定。
+
+_ABOUT_LINKS = {
+    "xiaohongshu": "https://www.xiaohongshu.com/user/profile/63c200200000000027028222",
+    "github": "https://github.com/ChineseRyan/huoban",
+    "ifdian": "https://ifdian.net/a/ChineseRyan",
+}
+
+_ABOUT_URLS = tuple(_ABOUT_LINKS.values())
+
+
+def _open_external(url: str) -> None:
+    """把 URL 交给系统默认浏览器（`os.startfile` 在 Windows 上走 ShellExecute，认 URL）。
+
+    单独拧成一个函数只为可替换：测试不该真的弹出去，`tests/test_gui.py` 会换掉它。
+    """
+    os.startfile(url)  # noqa: S606 - Windows 专用，正是想要的行为
+
+
+def _read_clipboard() -> str:
+    """读剪贴板里的纯文本。Windows 专用，只用 ctypes，不引第三方依赖。
+
+    为什么由 Python 读而不是 JS：pywebview 没有接 `PermissionRequested`，
+    `navigator.clipboard` 的权限与"安全上下文"都不确定（见「书名 / 作者输入框
+    要能右键粘贴」一节的 spike 结论）。
+
+    空剪贴板、里面只有图片或文件时返回 ""（**这不是失败**）；
+    被别的程序占着、系统拒绝时抛 OSError，由调用方翻成人话。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    CF_UNICODETEXT = 13
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # 不声明 restype 的话，句柄会被当成 32 位 int 截断，64 位下拿到的指针是坏的。
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+
+    if not user32.OpenClipboard(None):
+        raise OSError("被别的程序占着，稍等一下再试")
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ""  # 空剪贴板，或者里面只有图片/文件，没有纯文本
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            raise OSError("内容读不出来（锁定失败）")
+        try:
+            return ctypes.wstring_at(ptr)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
 class Api:
     """`webview.create_window(..., js_api=Api())` 挂上去的那个对象。
 
@@ -1473,9 +1552,23 @@ class Api:
             self._run_import_epub(job, session)
             return
 
-        result = clean_file(src, adjust=session.adjust)
-        # 取消检查点：清洗是整个流程里最长的一段，用户多半是在这里点的取消。
-        # 赶在 mkdir 之前拦下来，就等于这次什么都没发生，连回收站都不用麻烦。
+        def _step(done: int, total: int, stage: str) -> None:
+            """清洗中途的检查点：每 CANCEL_CHECK_LINES 步查一次取消旗子。
+
+            回调里只做取模、读一个布尔、写一个短字符串 —— 条目明写「回调里别做重活」。
+            `Cancelled` 从这里抛出去，一路冒过 `clean_file`，落到 `_spawn` 的
+            `except Cancelled` 分支，所以用户看到的是「取消了」，不是「清洗失败」。
+            """
+            if done % CANCEL_CHECK_LINES and done != total:
+                return
+            job.last_step = f"{stage} {done}/{total}"
+            if job.cancel_requested:
+                raise Cancelled()
+
+        result = clean_file(src, adjust=session.adjust, on_step=_step)
+        # 取消检查点：写盘之前再看了一眼（上面那一行是每 N 行的兜底，
+        # 这里是"清洗刚好跑完时用户才点"的窗口）。赶在 mkdir 之前拦下来，
+        # 就等于这次什么都没发生，连回收站都不用麻烦。
         if job.cancel_requested:
             raise Cancelled()
         book, report = result.book, result.report
@@ -2475,6 +2568,56 @@ class Api:
             os.startfile(str(target))  # noqa: S606
         except OSError as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True}
+
+    def about_links(self) -> dict:
+        """页脚要显示的三条外链地址，`open_url` 白名单的同一份（`todo/0.3.0.md`
+        的「【设计】“关于”页重设计」）。
+
+        ui.html 是单文件零外链（`case_ui_has_no_external_links` 钉着），所以地址不写进
+        前端，渲染时来这里取；取到的每一条都能被 `open_url` 放行 —— 两处不会漂。
+
+        返回：`{"links": {"xiaohongshu": ..., "github": ..., "ifdian": ...}}`。
+        这条没有失败路径（纯数据拷贝，不碰文件、不碰网络），所以不返回 `error`。
+        """
+        return {"links": dict(_ABOUT_LINKS)}
+
+    def paste_text(self) -> dict:
+        """把剪贴板里的纯文本交给界面（书名 / 作者框的右键「粘贴」）。
+
+        契约定在 `todo/0.3.0.md` 的「书名 / 作者输入框要能右键粘贴」一节，
+        是 UI设计肥鱼 与这里的交界件：
+        - 成功 `{"text": "..."}`；剪贴板为空或只有非文本 → `{"text": ""}`，**空不是失败**；
+        - 读不到 → `{"error": "<人话>"}`，不抛异常、不 print；
+        - **可缺省方法**：界面用 `a.paste_text &&` 守卫，缺席时「粘贴」置灰、「全选」照常。
+
+        剪贴板由 Python 读，不押 `navigator.clipboard`（pywebview 没接
+        `PermissionRequested`，权限与安全上下文都不确定）。
+        """
+        try:
+            text = _read_clipboard()
+        except OSError as exc:
+            return {"error": f"读不到剪贴板：{exc}"}
+        return {"text": text if isinstance(text, str) else ""}
+
+    def open_url(self, url: str) -> dict:
+        """关于页外链通道（`todo/0.3.0.md` 的「【设计】“关于”页重设计」· 外链通道方案 C）。
+
+        只放行 `_ABOUT_URLS` 里的三条地址，去掉首尾空白后逐字比对：同域名换路径、
+        换协议、带 query、换大小写一律不放行。前端负责 preventDefault() + stopPropagation()，
+        这里负责「传什么都开不了别的」。
+
+        返回：成功 `{"ok": True}`；失败只有 `{"error": "<人话>"}`（不抛异常、不 print）。
+        """
+        target = (url or "").strip()
+        if not target:
+            return {"error": "没有给出要打开的地址"}
+        if target not in _ABOUT_URLS:
+            return {"error": "这个地址不在活板的放行清单里，没有打开"}
+        try:
+            _open_external(target)
+        except OSError as exc:
+            return {"error": f"没能打开浏览器：{type(exc).__name__}: {exc}"}
         return {"ok": True}
 
     def app_info(self) -> dict:

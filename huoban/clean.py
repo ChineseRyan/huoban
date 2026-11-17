@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -2388,6 +2389,7 @@ def _scan(
     bare_numbers: bool = True,
     story_titles: frozenset[int] = frozenset(),
     protect: frozenset[int] = frozenset(),
+    on_step: Callable[[int, int, str], None] | None = None,
 ) -> tuple[list[_Line], dict]:
     """逐行规范化 + 分类 + 删整行广告与目录标记。
 
@@ -2402,6 +2404,12 @@ def _scan(
 
     story_titles 是"整本没有章节标记"时由 _story_title_lines 认出来的分篇
     标题行号（原始行下标）。默认空集，正常书一条都用不上。
+
+    on_step(done, total, stage) 是可选检查点（todo/0.3.0.md 的「清洗中途检查点」）：
+    每扫完一行喊一次，stage 为 "scan"。**不传时行为与没有这个参数时完全相同**，
+    界面也仍然不显示进度（决定 7）—— 它只给调用方两个用处：中途能取消、
+    卡住时知道自己停在第几行。回调里别做重活；回调抛什么就往外抛什么，
+    这里不拦（取消就是靠它抛出来）。
     """
     items: list[_Line] = []
     ad_samples: list[dict] = []
@@ -2473,7 +2481,12 @@ def _scan(
             # 报告要能点名（见 _build_report 的 unmatched）。
             protect_hit.append(no)
 
+    total_lines = len(lines)
     for i, raw in enumerate(lines):
+        # 检查点放在行首：这一行还没开始干活就先把"要不要停"问出去，
+        # 命中取消时最多白做一行，而不是白做一整本。
+        if on_step is not None:
+            on_step(i + 1, total_lines, "scan")
         # 段首占位符先剥掉：它是"原作者在这里另起一段"的证据（见 _LEAD_MARKERS），
         # 但本身不是内容。剥了之后剩下的话照常走规范化 —— 注意喂给 normalize_line
         # 的是剥过的文本，否则 4 个半角空格 + 问号串会被当成正文缩进留下来。
@@ -3223,6 +3236,7 @@ def _merge_fragments(
     merge_breaks: frozenset[int] = frozenset(),
     hard: bool = False,
     width: int = 0,
+    on_step: Callable[[int, int, str], None] | None = None,
 ) -> tuple[list[_Line], list[dict], int, int, int, int]:
     """把被硬折断的半句接回去。
 
@@ -3275,8 +3289,15 @@ def _merge_fragments(
     group_total = 0
     wrap_rejected = 0
     breaks_hit_lines: set[int] = set()
+    # 段落重组的检查点（todo/0.3.0.md 的「清洗中途检查点」）：按 items 的条数报，
+    # stage 为 "merge"。不传回调时这个分支一次都不进，行为与从前逐字节相同。
+    total_items = len(items)
+    step_done = 0
 
     for it in items:
+        step_done += 1
+        if on_step is not None:
+            on_step(step_done, total_items, "merge")
         prev = out[-1] if out else None
         # 硬折行碎片：放宽"上一行必须没写完""当前行不能有缩进"两条。
         forced = it.wrap_frag
@@ -4173,7 +4194,8 @@ class CleanResult:
 
 def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
                confidence: float = 0.0, size_bytes: int | None = None,
-               adjust: dict | None = None) -> CleanResult:
+               adjust: dict | None = None,
+               on_step: Callable[[int, int, str], None] | None = None) -> CleanResult:
     """清洗一段已经解码好的文本。这是整条流水线的唯一入口。
 
     encoding/confidence 由解码方传进来：文本一旦变成 str，原始编码就不可考了，
@@ -4183,6 +4205,9 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
     删除（protect_lines / protect_ranges）与合并（merge_breaks）。
     adjust=None 时行为与没有这个参数时逐字节相同 —— 这是硬要求，
     规则层不许因为多了一条人工通道就改变自己的判断。
+
+    on_step 是可选的检查点（见 _scan 的同名参数）：逐行扫描报 "scan"、
+    段落重组报 "merge"。不传时一个决定都不变，界面也仍然不显示进度。
     """
     lines = text.splitlines()
     adj = _parse_adjust(adjust, len(lines))
@@ -4198,7 +4223,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
         # 否则会把好书从中间切开（《书U》110 章 / 7 条顿号编号）。
         probe_items, _ = _scan(
             lines, bracket_sections=bracket_sections, numbered_sections=False,
-            bare_numbers=bare_numbers, protect=adj.protect,
+            bare_numbers=bare_numbers, protect=adj.protect, on_step=on_step,
         )
         if not any(it.is_title for it in probe_items):
             numbered_sections = _numbered_section_is_structure(
@@ -4206,7 +4231,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
             )
     items, ad_info = _scan(
         lines, bracket_sections=bracket_sections, numbered_sections=numbered_sections,
-        bare_numbers=bare_numbers, protect=adj.protect,
+        bare_numbers=bare_numbers, protect=adj.protect, on_step=on_step,
     )
     # 短篇集：整本一条章节标记都没有（诗文集、论坛体、短篇合集）时，故事标题
     # 只能靠排版认。只在 0 章的书上开这扇门 —— 有章节结构的书不掺和，
@@ -4219,6 +4244,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
                 lines, bracket_sections=bracket_sections,
                 numbered_sections=numbered_sections, bare_numbers=bare_numbers,
                 story_titles=frozenset(story_titles), protect=adj.protect,
+                on_step=on_step,
             )
     # 目录块必须在**原始行**上判：_scan 会把"目录"标记行整行删掉、把广告行删掉，
     # 拿剩下的行去检测，"目录"那一行就从簇里缺了一块，短目录（2~4 条）直接
@@ -4346,6 +4372,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
         hard=_hardwrap_ratio(lines) >= _HARDWRAP_RATIO,
         # 折行宽度只给硬折行的书用（见上面那条"占满宽度"判据）。
         width=_hardwrap_width(lines),
+        on_step=on_step,
     )
     # merge_breaks_hit 是"确实拦住了一次合并"的行号集合，不是计数。
     merge_breaks_hit_count = len(merge_breaks_hit)
@@ -4453,11 +4480,14 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
 
 
 def clean_bytes(raw: bytes, *, source: str = "",
-                adjust: dict | None = None) -> CleanResult:
+                adjust: dict | None = None,
+                on_step: Callable[[int, int, str], None] | None = None) -> CleanResult:
     """从原始字节开始清洗：先探编码，再解码，再走 clean_text。
 
     编码探测复用 encoding.detect()（常用字占比打分），不用 try/except ——
     用异常判定编码会静默吞掉"能解但解错"的情况，那正是最坏的一种错。
+
+    on_step 原样透传给 clean_text（见那里对检查点的说明）。
     """
     candidates = detect(raw)
     chosen = candidates[0]
@@ -4469,15 +4499,20 @@ def clean_bytes(raw: bytes, *, source: str = "",
         confidence=round(chosen.score, 3),
         size_bytes=len(raw),
         adjust=adjust,
+        on_step=on_step,
     )
 
 
-def clean_file(path: Path | str, *, adjust: dict | None = None) -> CleanResult:
+def clean_file(path: Path | str, *, adjust: dict | None = None,
+               on_step: Callable[[int, int, str], None] | None = None) -> CleanResult:
     """清洗一个文件。**只读**：输入文件的字节数、mtime 都不会被碰。
 
     为什么这里不检查"输出会不会覆盖输入"：本函数没有输出路径。
     写盘统一由 CLI 的 write_outputs() 负责，那里才有路径可比。
+
+    on_step 原样透传 —— GUI 走的就是这条路，取消要靠它在中途生效
+    （todo/0.3.0.md 的「清洗中途检查点」）。
     """
     p = Path(path)
     raw = p.read_bytes()
-    return clean_bytes(raw, source=str(p), adjust=adjust)
+    return clean_bytes(raw, source=str(p), adjust=adjust, on_step=on_step)

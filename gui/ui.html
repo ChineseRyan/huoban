@@ -24,11 +24,8 @@
     --ink-2: #6B675C;
     --ink-3: #928C7E;
     --seal: #A83A2E;
-    /* 拖放墨团那两团「墨」：写成 RGB 三元组，是给 rgba(var(--tone), …) 用的。
-       能处理的书 = 印色那支暖红，明显不是书的东西 = 墨色。
-       值就是 --seal / --ink，但十六进制塞不进 rgba() 的槽位，只能各写一份。 */
-    --bloom-book: 168, 58, 46;
-    --bloom-other: 27, 29, 30;
+    /* 拖放墨团的五支色不在这里：它们挂在 #drop-area 自己的 --tone-l/--tone-d 上
+       （见「拖放：一团墨跟手」一节），因为每次拖拽要随机换一支。 */
     /* 背景残字的颜色：比 ink-3 还淡一档。只在处理中页的背景里用。 */
     --faint: #B7AE9B;
     --rule: rgba(27, 29, 30, 0.16);
@@ -63,26 +60,25 @@
      认属性才能让"固定浅色"在系统是深色时也真的浅。
      配色取封面「松墨」那套 (#15181D 底 / 宣纸白字)，不是纯黑纯白：
      纯 #000 上的白字会发晕，纯 #FFF 会刺眼。
-     印色提亮到 #E07A6C：原色 #A83A2E 在深底上只有 3.1:1，
-     而警告文字是小字号，要过 4.5:1（提亮后实测 6.3:1）。 */
+     印色压暗到 #D65E4D（关于页重设计 v2 定下的深色朱砂，2026-11-12 开发者定，
+     见 docs/notes/about-seal-dark-color.md；原 #E07A6C 偏粉、已作废）。
+     #D65E4D 在深底上约 4.7:1，小字号的警告文字仍过 4.5:1。 */
   html[data-dark="1"] {
     --paper: #15181D;
     --paper-2: #1D2128;
     --ink: #E8E4DA;
     --ink-2: #A8A296;
     --ink-3: #77726A;
-    --seal: #E07A6C;
-    --bloom-book: 224, 122, 108;
-    --bloom-other: 232, 228, 218;
+    --seal: #D65E4D;
     --faint: #565248;
     --rule: rgba(232, 228, 218, 0.20);
     --rule-soft: rgba(232, 228, 218, 0.11);
 
-    --seal-tint: rgba(224, 122, 108, 0.10);
-    --seal-line: rgba(224, 122, 108, 0.55);
-    --seal-line-2: rgba(224, 122, 108, 0.6);
-    --seal-fill: rgba(224, 122, 108, 0.12);
-    --seal-border: rgba(224, 122, 108, 0.45);
+    --seal-tint: rgba(214, 94, 77, 0.10);
+    --seal-line: rgba(214, 94, 77, 0.55);
+    --seal-line-2: rgba(214, 94, 77, 0.6);
+    --seal-fill: rgba(214, 94, 77, 0.12);
+    --seal-border: rgba(214, 94, 77, 0.45);
 
     --hover: rgba(232, 228, 218, 0.05);
     --row-line: rgba(232, 228, 218, 0.07);
@@ -266,9 +262,15 @@
   #drop-hot:hover ~ .marks i { border-color: var(--ink-3); }
 
   /* ---------- 拖放：一团墨跟手 ----------
-     拖进来的东西分两类，只按 MIME 判（dragover 阶段 pywebview 不给 JS 路径，
-     扩展名也拿不到，见 TODO 第 3 组）。能处理的 → 暖色 --seal；明显不是书的
-     （图片/音视频/PDF）→ 墨色 --ink。绿/红是通用软件语义，不是这身纸墨的调子。
+     悬停阶段只有一种状态：文件进了框，一团墨跟着光标洇开，题字换成「请松手」。
+     书还是非书在悬停期判不出来 —— 实测（_shot/drag_spike.log）：dragenter /
+     dragover 阶段 getAsFile() 与 webkitGetAsEntry() 一律是 null，.lnk 连 MIME
+     都没有。所以这一段不给判词，结论交给松手后的流程（Python 按后缀判）。
+
+     墨的颜色每拖一次抽一支：五支都从封面色板（gui/cover.py 的六套配色）与正文墨
+     里取，用户之后挑封面见的也是这一套，不是随手找五个好看的颜色。深浅各一档，
+     随主题切；--tone 是给 rgba() 用的 RGB 三元组，--tone-solid 是同色的实色
+     （题字用）。一次拖拽内不换色，换了像故障。
 
      两层，都是 pointer-events:none 的绝对定位方块，靠 --x/--y 跟光标：
      .bloom 是一团径向渐变的墨，.ripple 是一圈从墨心荡开的环。 */
@@ -310,13 +312,25 @@
     transform: translate(var(--x, 50%), var(--y, 50%)) scale(0.25);
   }
 
-  /* 默认就是"书"那支暖色：一来平时那团墨 opacity 是 0，看不出颜色；二来没这个
-     兜底，rgba(var(--tone), …) 在平时是无效值，整条渐变作废。只有"不是书"要改色。 */
-  #drop-area { --tone: var(--bloom-book); }
-  #drop-area[data-drop="other"] { --tone: var(--bloom-other); }
+  /* 五支色的两档值写在这里，是兜底：平时那团墨 opacity 是 0，看不出颜色，
+     但 rgba(var(--tone), …) 需要一个有效值，没有它整条渐变作废。
+     兜底用第一支（朱），也就是 --seal 那一支。抽色时由 JS 改这四行。
+     深色档在 html[data-dark="1"] 那条更具体的选择器里接管 —— 选择器更具体，
+     所以就算 --tone-l 被内联改过，深色下拿到的仍是 --tone-d。 */
+  #drop-area {
+    --tone-l: 168, 58, 46;
+    --tone-d: 214, 94, 77;
+    --solid-l: #A83A2E;
+    --solid-d: #D65E4D;
+    --tone: var(--tone-l);
+    --tone-solid: var(--solid-l);
+  }
+  html[data-dark="1"] #drop-area {
+    --tone: var(--tone-d);
+    --tone-solid: var(--solid-d);
+  }
 
-  #drop-area[data-drop="book"] .bloom,
-  #drop-area[data-drop="other"] .bloom { opacity: 1; }
+  #drop-area[data-drop="drag"] .bloom { opacity: 1; }
 
   @keyframes ripple {
     0%   { opacity: 0.5;
@@ -326,14 +340,12 @@
            transform: translate(var(--x, 50%), var(--y, 50%)) scale(1); }
   }
 
-  #drop-area[data-drop="book"] .ripple,
-  #drop-area[data-drop="other"] .ripple {
+  #drop-area[data-drop="drag"] .ripple {
     animation: ripple 1600ms cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
   }
 
   /* 拖入时四角裁切线退到后面去：这时候画面主角是墨团，角是配角 */
-  #drop-area[data-drop="book"] .marks,
-  #drop-area[data-drop="other"] .marks { opacity: 0.45; }
+  #drop-area[data-drop="drag"] .marks { opacity: 0.45; }
 
   /* 拖入时右上主题按钮与右下「关于」也让位 */
   body[data-drop-active="1"] .chrome,
@@ -341,16 +353,15 @@
 
   @media (prefers-reduced-motion: reduce) {
     #drop-area .bloom { transition: opacity 120ms linear; }
-    #drop-area[data-drop="book"] .ripple,
-    #drop-area[data-drop="other"] .ripple { animation: none; opacity: 0.3; }
+    #drop-area[data-drop="drag"] .ripple { animation: none; opacity: 0.3; }
   }
 
   /* 首屏只有一句话：宋体 30px、字距 0.1em —— 宋体的横细竖粗在浅底上很像书名，
      这一屏除了书名什么都不该有。 */
-  /* 一句话的三个状态叠在同一格里：位置、字号全不动，只交叉淡换字与颜色。
-     三态分别是「平时 / 拖书 / 拖了不是书的东西」。
+  /* 一句话的两个状态叠在同一格里：位置、字号全不动，只交叉淡换字与颜色。
+     两态分别是「平时 / 拖着文件」（迎宾态只有这一句「请松手」）。
 
-     用 grid 1×1 而不是绝对定位：三份字都放进同一个格子，格子宽度取最宽那份
+     用 grid 1×1 而不是绝对定位：两份字都放进同一个格子，格子宽度取最宽那份
      （平时态那六个字），所以换态时字宽变了也不会把版面推一下。 */
   .drop-title {
     display: grid;
@@ -375,13 +386,47 @@
   }
 
   .drop-title .t-idle { opacity: 1; color: var(--ink); }
-  .drop-title .t-book { color: var(--seal); }
-  .drop-title .t-other { color: var(--ink); }
+  /* 迎宾那句用这一拖抽到的实色：和墨团同一支，看着是同一件事 */
+  .drop-title .t-drag { color: var(--tone-solid); }
 
-  #drop-area[data-drop="book"] .drop-title .t-idle,
-  #drop-area[data-drop="other"] .drop-title .t-idle { opacity: 0; }
-  #drop-area[data-drop="book"] .drop-title .t-book,
-  #drop-area[data-drop="other"] .drop-title .t-other { opacity: 1; }
+  #drop-area[data-drop="drag"] .drop-title .t-idle { opacity: 0; }
+  #drop-area[data-drop="drag"] .drop-title .t-drag { opacity: 1; }
+
+  /* ---------- 右键菜单：只给三个输入框 ----------
+     自绘的一块纸，不借系统菜单的外观（Windows 那套灰白弹层与这身纸墨是两回事）：
+     纸底、墨字、悬停压一层印色淡底，深浅全交给变量跟着主题走。
+     位置由 JS 贴着光标放，越界时夹回窗口内 —— 这里只管它长什么样。
+     只有书名 / 作者 / 输出目录三个框会亮出它（语言框不做）。 */
+  .ctx-menu {
+    position: fixed;
+    z-index: 80;
+    min-width: 128px;
+    padding: 5px 0;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    box-shadow: 0 8px 22px rgba(27, 29, 30, 0.14);
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 0.03em;
+  }
+
+  .ctx-menu[hidden] { display: none; }
+
+  .ctx-menu button {
+    display: block;
+    width: 100%;
+    padding: 7px 14px;
+    background: none;
+    border: 0;
+    text-align: left;
+    font: inherit;
+    letter-spacing: inherit;
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .ctx-menu button:hover:not(:disabled) { background: var(--seal-tint); }
+  .ctx-menu button:disabled { color: var(--ink-3); cursor: default; }
 
   /* ---------- 关于 ----------
      自用工具，「这是什么程序」一辈子只问一次，答一次就够了 ——
@@ -400,15 +445,24 @@
     justify-content: center;
   }
 
+  /* 关于页改成上下两段：牌记居中，页脚贴底（v2 落地，2026-11-14）。
+     main 让出页脚那一条；本屏的 --ink-3 压深一档，但**只在本屏生效** ——
+     全局 --ink-3 还管着别的屏的次要文字，动了就是整站变深，超出「只动关于屏」的范围。 */
+  body[data-view="about"] #view-about { display: flex; flex-direction: column; }
+  #view-about main { flex: 1; height: auto; }
+  #view-about { --ink-3: #6F695F; }
+  html[data-dark="1"] #view-about { --ink-3: #8D8880; }
+
   /* 印面：一张 264×264 的 alpha 蒙版，底色吃 var(--seal) ——
-     颜色不写死，浅色是 #A83A2E、深色自动变 #E07A6C，两版一次写。
+     颜色不写死，浅色是 #A83A2E、深色是 #D65E4D（2026-11-14 由 #E07A6C 改来），两版一次写。
      112px 是三档尺子量的：88 字口糊、136 压住版本号。
      ★ 蒙版图必须是带 alpha 通道的 RGBA：灰度 PNG 不会自动当遮罩，
        会整块糊成实心方块（这个坑踩过）。
      ★ -webkit- 前缀与标准属性双写，WebView2 两个都认，缺一个就没效果。 */
   .ab-mark {
-    width: 112px;
-    height: 112px;
+    /* 第 8 条（v2）：印面响应式 —— 72 是「字口不糊」的下限，112 是「不压版本号」的上限。 */
+    width: clamp(72px, 18vw, 112px);
+    height: clamp(72px, 18vw, 112px);
     background-color: var(--seal);
     -webkit-mask-image: url("data:image/png;base64,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");
     mask-image: url("data:image/png;base64,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");
@@ -428,7 +482,95 @@
     margin-right: -0.16em;
     color: var(--ink-3);
     line-height: 1.6;
+    /* v2 第 1 条：版本号用等宽数字，免得换版本时整行左右跳。 */
+    font-variant-numeric: tabular-nums;
   }
+
+  /* ---------- 关于页页脚（v2 落地，2026-11-14）----------
+     左边两条外链，右边「请喝杯茶」。页脚贴窗口底，窄屏 wrap 后按钮仍靠右
+     （margin-left:auto 全局生效）。 */
+  .ab-footer {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    border-top: 1px solid var(--rule);
+    padding: 24px 24px 32px;
+  }
+  @media (min-width: 600px) {
+    .ab-footer { padding-left: 48px; padding-right: 48px; }
+  }
+  .ab-footer[hidden] { display: none; }
+
+  .ab-links { display: flex; align-items: center; gap: 24px; }
+
+  .ab-link {
+    color: var(--ink);
+    text-decoration: none;
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+  /* 箭头交给 CSS 画，强制文本渲染，别让系统换成彩色 emoji。 */
+  .ab-link::after {
+    content: "\2197";
+    font-size: 0.85em;
+    margin-left: 2px;
+    vertical-align: 0.15em;
+    font-variant-emoji: text;
+  }
+
+  .ab-sep { width: 1px; height: 18px; background: var(--rule); }
+
+  /* 打赏区：按钮 + 悬停二维码。二维码绝对定位在按钮正上方，
+     用 padding-bottom 把空隙填进自己盒子 —— 光标从按钮往上挪时不会掉出悬停区，
+     否则鼠标一进空隙二维码就灭，闪一下像是坏了。 */
+  .ab-donate { position: relative; margin-left: auto; }
+
+  .ab-btn {
+    min-width: 120px;
+    height: 36px;
+    padding: 0 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px solid var(--seal-border);
+    border-radius: 0;
+    color: var(--seal);
+    font-family: var(--sans);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .ab-btn span {
+    letter-spacing: 0.08em;
+    margin-right: -0.08em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ab-qr {
+    position: absolute;
+    right: -16px;          /* 图片自带 4 模组透明静区，退 16px 让二维码本体右缘与按钮右缘对齐 */
+    bottom: 100%;
+    padding-bottom: 12px;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 140ms linear, visibility 0s linear 140ms;
+  }
+  .ab-donate:hover .ab-qr,
+  .ab-donate:focus-within .ab-qr {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 140ms linear;
+  }
+
+  .ab-qr img { display: block; width: 180px; height: 180px; }
+  .ab-qr .qr-dark { display: none; }
+  html[data-dark="1"] .ab-qr .qr-light { display: none; }
+  html[data-dark="1"] .ab-qr .qr-dark { display: block; }
 
   /* 关于页不留窗框 */
   body[data-view="about"] .chrome { display: none; }
@@ -1864,26 +2006,44 @@
   .err-title {
     font-size: 26px;
     line-height: 1.3;
-    margin: 0 0 10px;
+    /* 6px：2026-11-17 开发者判「段间距收窄」，标题到正文从 10 收一档。
+       标题自己有 1.3 的行高留白，不需要再垫 10px。 */
+    margin: 0 0 6px;
     font-weight: 400;
     word-break: break-word;
   }
 
+  /* 正文按空行拆成 <p class="err-p">（见 errBody()），段距由这里给一个值 ——
+     以前靠 white-space: pre-wrap 加文案里的空行，段间是 25–26px，四段就吃掉 77px，
+     720×520 上一长就要滚半天。容器不再 pre-wrap；段内的单换行由 .err-p 自己保住。 */
   .err-body {
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.8;
     color: var(--ink-2);
-    white-space: pre-wrap;
+    white-space: normal;
     word-break: break-word;
     -webkit-user-select: text;
     user-select: text;
     margin: 0;
   }
 
+  /* 段距 12px：文件里已有的档位（9 / 10 / 12 / 14 / 16 都在用），不是为这一屏新造的值。
+     12px ≈ 半个行高（13.5px × 1.7 ≈ 22.95），段落分得开、又不散。 */
+  .err-body .err-p {
+    margin: 0 0 12px;
+    white-space: pre-wrap;
+  }
+
+  .err-body .err-p:last-child { margin-bottom: 0; }
+
   /* 技术细节：类名和异常原文不进正文，收在这个折角里。
-     默认关着 —— 出事的时候人要看的是「怎么办」，不是「哪一行」。 */
-  .err-more { margin-top: 24px; }
+     默认关着 —— 出事的时候人要看的是「怎么办」，不是「哪一行」。
+
+     margin-left 是跟正文对齐用的：正文被 .err-head 那根 2px 竖线 + 18px 间距
+     推到右边，而这里是 .err-head 的兄弟，默认贴着 .err-main 左缘 —— 差的就是
+     这 20px（2026-11-17 开发者判过：灰框该和上面的字同一条左边缘）。 */
+  .err-more { margin-top: 16px; margin-left: 20px; }
   .err-more[hidden] { display: none; }
 
   .err-more > summary {
@@ -1948,11 +2108,17 @@
      于是 row 里恒剩一颗，「并排」这个结构没有任何时候成立过。撤掉。 */
   .err-exit { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
 
+  /* 三颗出口按后果分档（2026-11-17 判过，方案 A）：
+     「仍然继续」是唯一会改结果的动作，提一档成描边按钮（.ghost 那一档）；
+     「打开所在目录」只是看一眼，留在虚线小字这一档，并再往下退 7px —— 
+     两档之间要有缝，不然描边按钮和它下面的小字读成一组。 */
+  #view-error #btn-err-reveal { margin-top: 7px; }
+
   @media (max-height: 600px) {
     .err-title { font-size: 22px; }
     .err-body { font-size: 13.5px; line-height: 1.7; }
-    .err-more { margin-top: 18px; }
-    .err-more pre { max-height: 120px; }
+    .err-more { margin-top: 12px; }
+    .err-more pre { max-height: none; }
     #view-error .actions { margin-top: 12px; padding-top: 10px; }
     .err-exit { gap: 6px; }
   }
@@ -1990,8 +2156,7 @@
       <div class="marks"><i></i><i></i><i></i><i></i></div>
       <div class="drop-title">
         <span class="t-idle">把书拖到这里</span>
-        <span class="t-book">书稿已得</span>
-        <span class="t-other">非书也</span>
+        <span class="t-drag">请松手</span>
       </div>
     </div>
   </main>
@@ -2263,7 +2428,7 @@
           <div class="spacer"></div>
           <div class="err-exit">
             <button class="ghost" id="btn-back">换一个文件</button>
-            <button class="dashed" id="btn-err-continue" hidden>仍然继续</button>
+            <button class="ghost" id="btn-err-continue" hidden>仍然继续</button>
             <button class="dashed" id="btn-err-reveal" hidden>打开所在目录</button>
           </div>
         </div>
@@ -2272,12 +2437,38 @@
   </main>
 </div>
 
-<!-- 关于：一块牌记。整屏只有一枚印和一行版本号，Esc 或点空白处回首页。 -->
+<!-- 关于：一块牌记 + 页脚。Esc 或点空白处回首页；
+     页脚两条外链与「请喝杯茶」都在这一屏里（v2 落地，2026-11-14）。 -->
 <div class="view" id="view-about">
   <main>
-    <div class="ab-mark"></div>
+    <div class="ab-mark" id="ab-mark"></div>
     <div class="ab-ver" id="ab-ver"></div>
   </main>
+  <!-- 页脚在 about_links() 回来之前一直 hidden：宁可先不显示，
+       也不给两条点了没反应的链接。 -->
+  <footer class="ab-footer" id="ab-footer" hidden>
+    <div class="ab-links">
+      <a class="ab-link" id="ab-link-xhs" href="#">小红书主页</a>
+      <span class="ab-sep"></span>
+      <a class="ab-link" id="ab-link-gh" href="#">GitHub 项目页</a>
+    </div>
+    <div class="ab-donate" id="ab-donate">
+      <!-- 悬停二维码：浅色是透明底朱印（直接落在纸面上），深色是一块灰纸签。
+           两种图片都自带 4 模组静区；这里只切显示，不换色。 -->
+      <div class="ab-qr" aria-hidden="true">
+        <img class="qr-light" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAWgAAAFoCAYAAAB65WHVAAAIIklEQVR4nO3cy3UkNxQFwaYO7ZEBsqRNbEtkwDgkWaCpBQS+RFXEnuwv82BxidcLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADO9TX9BD5//fnP68bef//6mnz9q4+/++evrL4/q49f//6e/vnUvTd/f678MfngAPw3gQaIEmiAKIEGiBJogCiBBogSaICo71fc9A7x7jvQ1fd39452dec7vTNfVd+B1x//9L9fJ2iAKIEGiBJogCiBBogSaIAogQaIEmiAqPwO+srpO9fVx1/dAU/fJ1zfAU/vZKd35rvd/e93lRM0QJRAA0QJNECUQANECTRAlEADRAk0QNTxO+i7271jvjK9k979+p7+/tZ30k/nBA0QJdAAUQINECXQAFECDRAl0ABRAg0QZQc9bPfOdPo+5On7lK/Y+VLmBA0QJdAAUQINECXQAFECDRAl0ABRAg0QdfwO+vQd6/R9v7tNP//TX3/9Puun//3u5gQNECXQAFECDRAl0ABRAg0QJdAAUQINEJXfQU/vNOt272B372jrz//01z+t/vzqnKABogQaIEqgAaIEGiBKoAGiBBogSqABosZ30E+/D3b3Trfu9J1xfae8+/FP//7VOUEDRAk0QJRAA0QJNECUQANECTRAlEADRI3voFd3mqs7zPpOdPfrq++QTzf9+qZ32tPfv9M/PydogCiBBogSaIAogQaIEmiAKIEGiBJogKjxDWp953j3HefunfLunfv0zvrpn2/986/vnK84QQNECTRAlEADRAk0QJRAA0QJNECUQANEjd8HvWr3jnF6Zzq9w67fl71q9f2d/n5Mm945v+P/h7DKCRogSqABogQaIEqgAaIEGiBKoAGiBBoganyDeff7XFdN75DrO9Tp+4ynv3/Tfz/1nfH78J26EzRAlEADRAk0QJRAA0QJNECUQANECTRA1Ph90NM7w/rO8/Sd8pXp+6zr37+775hPf/67OUEDRAk0QJRAA0QJNECUQANECTRAlEADRI1vQHfveKfvg919X2/9+a+a3ilPv/7dfL9+jTfwd5ygAaIEGiBKoAGiBBogSqABogQaIEqgAaLSG8Cf2BHvfvzp+5Cnd571nev0znf6+7n7+1F/fnVO0ABRAg0QJdAAUQINECXQAFECDRAl0ABR39NPYHonefpOdfX3775P+8ru379q9/djWv31fYb/D2GaEzRAlEADRAk0QJRAA0QJNECUQANECTRA1PgGcPcO9/Qd8/TOe3qHOr3Tnd7pX3n6+/OJ92OVEzRAlEADRAk0QJRAA0QJNECUQANECTRA1PgO+oqd5b2f35XpHW99J37393+36Z3zFSdogCiBBogSaIAogQaIEmiAKIEGiBJogKj0BvAn1HfEp+9Mr+zeGdd///TOeHpnfeUd3ynv5gQNECXQAFECDRAl0ABRAg0QJdAAUQINEPX9Otz0znf3Dnb3jnX6+a96+k729O/Xqk/8vutVTtAAUQINECXQAFECDRAl0ABRAg0QJdAAUd9P3zFPP//pHev0+7/78ad/f31nu/v7UX9/PvHn5wQNECXQAFECDRAl0ABRAg0QJdAAUQINEJXeaP6E3ffJnn4f8vTzr9/3O/3+XDn9/Xtvfv3TO+crTtAAUQINECXQAFECDRAl0ABRAg0QJdAAUfn7oKd3kFc/P32f827TO9y77+CnP9/TfW7+/jpBA0QJNECUQANECTRAlEADRAk0QJRAA0SN76DrO8fpHfbu37/756dN7+CvPP39n378d3wn7QQNECXQAFECDRAl0ABRAg0QJdAAUQINEPV19/t4dz/+6aZ3trt3qNOf7/Trq+/g63+/7+GdtBM0QJRAA0QJNECUQANECTRAlEADRAk0QFR+B717x3mlvhM9/f17+s54Vf37cfrrn+YEDRAl0ABRAg0QJdAAUQINECXQAFECDRCV3gAWTO+Y7256p77797sv+fem3586J2iAKIEGiBJogCiBBogSaIAogQaIEmiAqO/Xw9Xvi53e2U7vgHf//PTnWze943/Hd+a7OUEDRAk0QJRAA0QJNECUQANECTRAlEADRI3voO++453eWT59xzr9+3d//rs/v9PvK3/Hd85XnKABogQaIEqgAaIEGiBKoAGiBBogSqABoo7eCN7B9A75ytN3sPXXP70DX1V/ftOcoAGiBBogSqABogQaIEqgAaIEGiBKoAGixjeE9Z3p6Tvc6Z1o/T7u3fc5T98XfWX351O/j7zOCRogSqABogQaIEqgAaIEGiBKoAGiBBog6vsVV98xru44p3ey0zvW+g5+9f2Z/v6evjN+L37/Tv8/AidogCiBBogSaIAogQaIEmiAKIEGiBJogKj8DvruO88rT7+vt/76775jr+/U784JGiBKoAGiBBogSqABogQaIEqgAaIEGiDq+B306er36a4+v9074t3Pv74j3v36rpx+33KdEzRAlEADRAk0QJRAA0QJNECUQANECTRAlB103PR9ztP3Ae9+/On7nFfVd9bT3oc/fydogCiBBogSaIAogQaIEmiAKIEGiBJogKjjd9Cn7xynd7i771s+fcc9/fyn78O+svv1r5p+f1Y5QQNECTRAlEADRAk0QJRAA0QJNECUQANE5XfQ0zvKuumd7pXpHW59J/100+/fJ/75OUEDRAk0QJRAA0QJNECUQANECTRAlEADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAr//bv2xpwY6unsR8AAAAAElFTkSuQmCC" alt="爱发电二维码">
+        <img class="qr-dark" src="data:image/png;base64,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" alt="爱发电二维码">
+      </div>
+      <button class="ab-btn" id="ab-btn-donate" type="button"><span>请喝杯茶</span></button>
+    </div>
+  </footer>
+</div>
+
+<!-- 右键菜单：只有书名 / 作者 / 输出目录三个框会亮出它（见「右键菜单」一段）。
+     放在所有视图外面：它是浮在所有屏之上的那一层。 -->
+<div class="ctx-menu" id="ctx-menu" hidden>
+  <button type="button" id="ctx-paste">粘贴</button>
+  <button type="button" id="ctx-selectall">全选</button>
 </div>
 
 <script>
@@ -2307,6 +2498,8 @@
   function setView(name) {
     // 离开这一屏就把它的定时器全掐掉，否则轮换文案会一直在后台跑。
     if (name !== "busy") { busyLeave(); }
+    // 右键菜单是 fixed 浮层，换屏时必须跟着收，否则会悬在下一屏上。
+    ctxClose();
     document.body.setAttribute("data-view", name);
     var n = STEP_OF[name];
     if (!n) { return; }
@@ -2341,6 +2534,21 @@
     return (window.pywebview && window.pywebview.api) ? window.pywebview.api : null;
   }
 
+  // 正文按空行拆段：段距由 CSS（.err-body .err-p）说了算，不再靠文案里的空行撑开
+  // （2026-11-17 开发者判过乙 —— 原来段间 25–26px，四段吃掉 77px）。
+  // 空行之外的空段直接跳过；段内的单换行仍按换行显示，文案口径一个字没改。
+  function errBody(node, body) {
+    node.textContent = "";
+    var blocks = String(body || "").split(/\n{2,}/);
+    for (var i = 0; i < blocks.length; i++) {
+      if (!blocks[i].trim()) { continue; }
+      var p = document.createElement("p");
+      p.className = "err-p";
+      p.textContent = blocks[i];
+      node.appendChild(p);
+    }
+  }
+
   // 兜底页面。三件事必须分开说：
   // ①**是什么**（标题）+ **该怎么办**（正文）—— 都是人话，类名与异常原文不进正文；
   // ②**技术细节**收在折角里，默认关着，出问题时人要的是「怎么办」不是「哪一行」；
@@ -2356,7 +2564,7 @@
     opts = opts || {};
     stopPolling();
     text(el("e-title"), title || "没能处理这个文件");
-    text(el("e-body"), body || "");
+    errBody(el("e-body"), body);
 
     // 按下这一页时人在第几步 —— 页码条让人知道「是哪一步断的」。
     var step = opts.step || 0;
@@ -2405,11 +2613,13 @@
   //   done=true 就直接把用户弹回结果页。两道门都要查。
   function poll(jobId, onDone) {
     var a = api();
-    if (!a) { showError("界面没有连上后端", "pywebview 的桥没有注入成功。请重启程序；如果反复出现，说明打包缺了 webview 的 hooks。",
-      { step: 2, stepName: "看清洗结果" }); return; }
+    if (!a) { showError("程序没有启动完整", "窗口和程序之间没有连上。重启一次就好；如果反复出现，说明这个程序包本身有问题。",
+      { step: 2, stepName: "看清洗结果",
+        detail: "pywebview 的桥没有注入成功（打包缺了 webview 的 hooks 时也会这样）。" }); return; }
     a.job_poll(jobId).then(function (res) {
       if (jobId !== activeJobId) { return; }
-      if (!res) { showError("后端没有回应", "job_poll 返回了空值。", { step: 2, stepName: "看清洗结果" }); return; }
+      if (!res) { showError("后台没有回应", "这一次的结果没能拿回来。书还在原来那个位置。",
+        { step: 2, stepName: "看清洗结果", detail: "job_poll 返回了空值。" }); return; }
       if (res.error) {
         var errOpts = { step: 2, stepName: "看清洗结果", detail: res.error_detail };
         // 后端标了「默认拒收、但用户可以硬来」（现在只有整本糊行这一类），
@@ -2431,7 +2641,7 @@
       pollTimer = setTimeout(function () { poll(jobId, onDone); }, 300);
     }).catch(function (err) {
       if (jobId !== activeJobId) { return; }
-      showError("轮询出错", "等这本书的时候，界面和后台失去了一次联系。\n\n书还在原来那个位置，再拖一次就行。",
+      showError("和后台失去联系", "等这本书的时候，界面和后台失去了一次联系。\n\n书还在原来那个位置，再拖一次就行。",
         { step: 2, stepName: "看清洗结果", detail: String(err) });
     });
   }
@@ -3037,8 +3247,9 @@
     if (!jobId) { return; }
     var a = api();
     if (!a) {
-      showError("界面没有连上后端", "pywebview 的桥没有注入成功。请重启程序。",
-        { step: 2, stepName: "看清洗结果" });
+      showError("程序没有启动完整", "窗口和程序之间没有连上。重启一次就好。",
+        { step: 2, stepName: "看清洗结果",
+          detail: "pywebview 的桥没有注入成功（打包缺了 webview 的 hooks 时也会这样）。" });
       return;
     }
     stopPolling();
@@ -3086,7 +3297,8 @@
 
   function render(payload) {
     currentPayload = payload;
-    if (!payload) { showError("没有拿到结果", "后端返回了空的结果。", { step: 2, stepName: "看清洗结果" }); return; }
+    if (!payload) { showError("没有拿到结果", "后台没有送回结果。",
+      { step: 2, stepName: "看清洗结果", detail: "render() 收到的 payload 是空的。" }); return; }
 
     var isEpub = payload.kind === "epub";
     var stats = payload.stats || {};
@@ -3845,7 +4057,8 @@
     //   「打开这本书」静默 return、「打开所在目录」打开的是清洗产物目录 ——
     //   后端辛苦算的 epub/stem/cover 全白给，用户却以为程序没做出书。
     currentPayload = payload;
-    if (!payload) { showError("没有拿到打包结果", "后端返回了空的结果。", { step: 5, stepName: "完成" }); return; }
+    if (!payload) { showError("没有拿到打包结果", "后台没有送回结果。",
+      { step: 5, stepName: "完成", detail: "renderDone() 收到的 payload 是空的。" }); return; }
 
     // 书名当大标题，不带扩展名（决定35）：`.epub` 对读者零信息，
     // 而"这本书叫什么"才是他等了十分钟想确认的东西。
@@ -3964,12 +4177,14 @@
 
   function pollBuild(jobId) {
     var a = api();
-    if (!a) { showError("界面没有连上后端", "pywebview 的桥没有注入成功。",
-      { step: 4, stepName: "确认书名与封面" }); return; }
+    if (!a) { showError("程序没有启动完整", "窗口和程序之间没有连上。重启一次就好。",
+      { step: 4, stepName: "确认书名与封面",
+        detail: "pywebview 的桥没有注入成功（打包缺了 webview 的 hooks 时也会这样）。" }); return; }
     a.job_poll(jobId).then(function (res) {
       if (jobId !== activeJobId) { return; }
-      if (!res) { showError("后端没有回应", "job_poll 返回了空值。",
-        { step: 4, stepName: "确认书名与封面", back: { view: "meta", label: "回上一步" } }); return; }
+      if (!res) { showError("后台没有回应", "这一次的结果没能拿回来。书和封面都还在。",
+        { step: 4, stepName: "确认书名与封面", back: { view: "meta", label: "回上一步" },
+          detail: "job_poll 返回了空值。" }); return; }
       if (res.error) {
         // 打包失败是最需要「退回去改改」的那种错：书名、封面、输出目录都在 ④ 页，
         // 一颗「换一个文件」会把这三样全扔了。
@@ -4005,15 +4220,16 @@
         showError("打不开文件选择框", res.error, { step: 1, stepName: "拖进一本书" });
       }
     }).catch(function (err) {
-      showError("打不开文件选择框", String(err), { step: 1, stepName: "拖进一本书" });
+      showError("打不开文件选择框", "没能打开文件选择框。再点一次试试。",
+        { step: 1, stepName: "拖进一本书", detail: String(err) });
     });
   });
 
   // ---------- 关于 ----------
-  // 这一屏没有按钮，也没有左上角的返回箭头。出口只有两个：Esc、点页面。
-  // 这是用户明知道「看不出来怎么退出」也要换来的干净（决定见 `docs/archive/ui-handover-round3.md` 的 9.1 节）：
-  // 一块牌记上多任何一枚控件，它就变成一张设置页了。
-  // 整页都算「空白处」—— 点印面上也算。规则只有一条，讲一次就懂。
+  // 2026-11-14 落地 v2 后这一屏多了页脚（两条外链 + 「请喝杯茶」），
+  // 但出口不变：Esc、点空白处。规则只有一条，讲一次就懂。
+  // 唯一的变化是印面：它现在要接彩蛋的连点（条目里定的骨架），
+  // 所以点印面不再关页 —— 否则连点 7 次永远凑不满。
 
   function openAbout() { setView("about"); }
 
@@ -4021,6 +4237,47 @@
     // 入口只有 ① 首页一处，所以退回哪一屏是确定的，不用记来源。
     setView("drop");
   }
+
+  // 页脚三条去向全部经 js_api 走系统浏览器（方案 C）：地址由 about_links() 给，
+  // 这里不出现任何 URL 字面量 —— tests/test_gui.py 的 case_ui_has_no_external_links 钉着这条。
+  var aboutLinks = null;
+
+  function openAboutUrl(key) {
+    if (!aboutLinks || !aboutLinks[key]) { return; }
+    var a = api();
+    if (!a || !a.open_url) { return; }
+    a.open_url(aboutLinks[key]).catch(function () {});
+  }
+
+  function stopAndOpen(key) {
+    return function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openAboutUrl(key);
+    };
+  }
+
+  el("ab-link-xhs").addEventListener("click", stopAndOpen("xiaohongshu"));
+  el("ab-link-gh").addEventListener("click", stopAndOpen("github"));
+  el("ab-btn-donate").addEventListener("click", stopAndOpen("ifdian"));
+  // 二维码本身不是按钮：点它既不关关于页，也不弹浏览器。
+  el("ab-donate").addEventListener("click", function (e) { e.stopPropagation(); });
+
+  // 彩蛋骨架（2026-11-14 定：本版只留口子，不做可见效果）。
+  // 印面可点但不给任何视觉提示（不加光标变化、不弹提示）；1.5 秒内连点 7 次算触发。
+  var eggCount = 0;
+  var eggLast = 0;
+  el("ab-mark").addEventListener("click", function (e) {
+    e.stopPropagation();
+    var now = Date.now();
+    eggCount = (now - eggLast > 1500) ? 1 : eggCount + 1;
+    eggLast = now;
+    if (eggCount >= 7) {
+      eggCount = 0;
+      // 口子：彩蛋形式定了再从这儿接，别自己设计。
+      document.body.setAttribute("data-egg", "1");
+    }
+  });
 
   el("btn-about").addEventListener("click", function (e) {
     // #btn-about 挂在 #view-drop 里面、但不在 #drop-area 里面 —— 后者自己接
@@ -4078,8 +4335,9 @@
       }
       renderReview(res);
     }).catch(function (err) {
-      showError("打不开复核页", String(err),
-        { step: 3, stepName: "复核删改", back: { view: "result", label: "回上一步" } });
+      showError("打不开复核页", "没能打开复核页。刚才那些改动都还在。",
+        { step: 3, stepName: "复核删改", back: { view: "result", label: "回上一步" },
+          detail: String(err) });
     });
   });
 
@@ -4192,6 +4450,105 @@
   // 手填输出目录时，收起的 summary 也要跟着变。
   el("m-outdir").addEventListener("input", syncMoreNote);
 
+  // ---------- 右键菜单：只给书名 / 作者 / 输出目录三个框 ----------
+  //
+  // 正式包里全局右键是关的（pywebview 把右键菜单、浏览器快捷键、DevTools 绑在同一个
+  // debug 开关上，见 gui/app.py 的 _debug()）。这里**不去动那道闸**，只在三个输入框上
+  // 给一个自家的菜单：粘贴 / 全选。
+  //
+  // 触发用 mousedown（button === 2），不是 contextmenu：WebView2 关掉默认菜单之后
+  // contextmenu 还派不派发，引擎之间说法不一（一边实测照样触发，另一边专门绕开它），
+  // 而 mousedown 一定会来。contextmenu 只留一个 preventDefault 兜底，别让系统菜单
+  // 有机会冒头。
+  //
+  // 菜单的样式在「右键菜单」那一段：纸底墨字，深浅跟着主题走，不像系统弹的。
+  var CTX_IDS = ["m-title", "m-author", "m-outdir"];
+  var ctxTarget = null;
+
+  function ctxClose() {
+    var m = el("ctx-menu");
+    if (m && !m.hidden) { m.hidden = true; }
+    ctxTarget = null;
+  }
+
+  function ctxOpen(input, x, y) {
+    var m = el("ctx-menu");
+    if (!m) { return; }
+    var a = api();
+    // 后端没有 paste_text 时「粘贴」置灰但不隐藏：位置不跳，也让人看见这颗按钮
+    // 本来是在的（可缺省方法的降级动作，契约见 todo/0.3.0.md 那一节）。
+    el("ctx-paste").disabled = !(a && a.paste_text);
+    m.hidden = false;
+    ctxTarget = input;
+    var box = m.getBoundingClientRect();
+    var left = Math.min(x, window.innerWidth - box.width - 8);
+    var top = Math.min(y, window.innerHeight - box.height - 8);
+    m.style.left = Math.max(8, left) + "px";
+    m.style.top = Math.max(8, top) + "px";
+  }
+
+  // 往输入框里插字：替换当前选中，插完把光标放到新字后面。
+  // 程序改 value 不会触发 input，得自己派一次 —— 书名要重排字号、输出目录要更新
+  // 摘要，这两件事都挂在 input 事件上。
+  function ctxInsert(input, s) {
+    input.focus();
+    var start = input.selectionStart;
+    var end = input.selectionEnd;
+    if (typeof start !== "number" || typeof end !== "number") {
+      input.value += s;
+    } else {
+      input.value = input.value.slice(0, start) + s + input.value.slice(end);
+      var pos = start + s.length;
+      input.setSelectionRange(pos, pos);
+    }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  document.addEventListener("mousedown", function (ev) {
+    var m = el("ctx-menu");
+    if (ev.button !== 2) {
+      if (m && !m.hidden && !m.contains(ev.target)) { ctxClose(); }
+      return;
+    }
+    var t = ev.target;
+    if (!t || CTX_IDS.indexOf(t.id) < 0) { ctxClose(); return; }
+    // 这里 preventDefault 是拦「右键按下顺带做的那点默认事」（比如选中变化），
+    // 不是为了让系统菜单出来 —— 它本来就不出。
+    ev.preventDefault();
+    ctxOpen(t, ev.clientX, ev.clientY);
+  }, true);
+
+  document.addEventListener("contextmenu", function (ev) {
+    var t = ev.target;
+    if (t && CTX_IDS.indexOf(t.id) >= 0) { ev.preventDefault(); }
+  }, false);
+
+  el("ctx-paste").addEventListener("click", function () {
+    var t = ctxTarget;
+    var a = api();
+    ctxClose();
+    if (!t || !a || !a.paste_text) { return; }
+    a.paste_text().then(function (res) {
+      var s = (res && typeof res.text === "string") ? res.text : "";
+      if (!s) { return; }
+      ctxInsert(t, s);
+    }).catch(function () {
+      // 读不到剪贴板就什么也不做：这不是「书出问题」，不该弹错误页把人赶出这一屏。
+    });
+  });
+
+  el("ctx-selectall").addEventListener("click", function () {
+    var t = ctxTarget;
+    ctxClose();
+    if (!t) { return; }
+    t.focus();
+    t.select();
+  });
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") { ctxClose(); }
+  });
+
   // 输出目录：手填或点「选目录」。取消时 pick_dir 返回 {"path": ""}，保持原值。
   el("btn-outdir").addEventListener("click", function () {
     var a = api();
@@ -4245,10 +4602,11 @@
           });
       }
     }).catch(function (err) {
-      showError("打不开这本书", String(err), {
+      showError("打不开这本书", "没能打开这本书。\n\n书已经做好了，点下面那行小字就能找到它。", {
         step: 5, stepName: "完成",
         back: { view: "done", label: "回上一步" },
-        reveal: file
+        reveal: file,
+        detail: String(err)
       });
     });
   });
@@ -4344,78 +4702,47 @@
   // ---------- 拖放：一团墨跟着手 ----------
   //
   // drop 监听由 Python 端用 DOMEventHandler 注册（docs/gui-design.md 的「三个实现陷阱」一节陷阱 1）：JS 这边拿不到
-  // 绝对路径，dragover 阶段连路径都没有。所以这里只做两件事：
+  // 绝对路径，dragover 阶段连文件名都没有。所以这里只做两件事：
   // ① 拦住默认行为 —— 没有 preventDefault，WebView2 会直接把窗口导航到被
   //    拖进来的那个文件上，界面就没了；
-  // ② 按 MIME 分个类，让画面知道这团墨该是暖的还是墨的。
+  // ② 摆一团跟手的墨、把题字换成「请松手」，让画面知道"松手就行"。
   //
-  // 分类只看 dataTransfer 给的 MIME，结论分三档 —— 宁可少表态，不可乱表态：
-  //   "book"  ：认出是书（纯文本 / EPUB / MOBI）；
-  //   "other" ：认出明显不是书（图片、音视频、PDF、压缩包、JSON/XML、
-  //             可执行文件、办公文档……）；
-  //   ""      ：两边都认不出（octet-stream、空 MIME、冷门类型），不表态。
-  // 为什么非要中间这一档：Windows 常常报不出 .azw3 自己的类型，只给一个通用
-  // 类型 —— 一律按"不是书"会把真书挡在门外；一律按"可能是书"又会给 exe/json
-  // 亮「书稿已得」（2026-11-09 用户反馈的正是这个）。AZW3 因此落进"不表态"，
-  // 松手后由 Python 按扩展名给出准确提示 —— 这里不猜第二遍。
-  // 取舍见 docs/notes/drop-classification-three-ways.md。
-  // 同一个格式在 Windows 上可能报好几种 MIME：EPUB 常见 application/epub+zip，
-  // 但注册表里也可能是 application/epub；MOBI 可能是 application/mobi 或
-  // application/x-mobipocket-ebook；AZW3 反而常常一个类型都没有，落进中间那档。
-  var BOOK_MIME = /^(text\/plain|text\/text|application\/epub(\+zip)?|application\/mobi|application\/x-mobi8-ebook|application\/x-mobipocket-ebook|application\/vnd\.amazon\.ebook)$/;
-  // 图片 / 音视频 / 字体，以及除纯文本以外的 text/*（网页、CSV、源码……）。
-  var NOT_BOOK = /^(image|video|audio|font|text)\//;
-  // 办公文档：Word（含宏文档、模板）/ RTF / WPS（金山 kswps 与 MS Works
-  // 两套）/ Office 整套 / ODF 整套。只认 MIME，一个扩展名都不写（dragover
-  // 阶段本来就拿不到扩展名）。
-  // 注意 application/epub+zip 不在这里 —— 它恰恰是要收的那种。
-  var NOT_BOOK_DOC = /^application\/(msword|rtf|kswps|vnd\.ms-word|vnd\.ms-works|vnd\.ms-excel|vnd\.ms-powerpoint|vnd\.openxmlformats-officedocument\.|vnd\.oasis\.opendocument\.)/;
-  // 其余一眼不是书的常见类型：PDF、JSON/XML、脚本、各种压缩包、可执行程序。
-  // 可执行只认 application/x-msdownload（.exe）与几个安装包类型，不去枚举
-  // Windows 全部可执行类型 —— 认不出的自然落进中间那档，由 Python 给结论。
-  var NOT_BOOK_OTHER = /^application\/(pdf|json|xml|javascript|ecmascript|x-msdownload|x-msi|x-msdos-program|x-ms-installer|zip|x-zip-compressed|x-rar-compressed|x-7z-compressed|x-gzip|x-tar|x-bzip2|gzip)/;
+  // 悬停期不判书/非书（2026-11-17 开发者定）：实测 dragenter / dragover 里
+  // getAsFile() 与 webkitGetAsEntry() 一律是 null，.lnk 连 MIME 都没有 ——
+  // 判了也是猜。判词留给松手后的 Python：它拿得到路径，按后缀给结论。
+  // 实测记录见 _shot/drag_spike.log，取舍见 docs/notes/drag-welcome-five-colors.md。
 
-  // 一次拖拽可能带好几个文件（还可能混着类型）。只要有一个认得出的书就当书：
-  // Python 那边会逐个报"这个不是书"，这里只回答"该不该亮「书稿已得」"。
-  function classifyDrag(types) {
-    var book = false;
-    var other = false;
-    for (var i = 0; i < types.length; i++) {
-      var t = types[i];
-      if (BOOK_MIME.test(t)) { book = true; }
-      else if (NOT_BOOK.test(t) || NOT_BOOK_DOC.test(t) || NOT_BOOK_OTHER.test(t)) { other = true; }
-    }
-    if (book) { return "book"; }
-    if (other) { return "other"; }
-    return "";
+  // 墨的五支色：四支印色取自封面色板（gui/cover.py 的六套配色），一支是正文墨。
+  // 用户之后挑封面见的也是这一套，不是随手找五个好看的颜色。
+  //   l / d  ：浅色档、深色档的 RGB 三元组，喂给 rgba(var(--tone), …)
+  //   sl / sd：同一支的实色，题字用
+  // 每次拖拽抽一支，整段拖拽不换（跳色像故障）。第一支是兜底默认。
+  var DRAG_COLORS = [
+    { l: "168, 58, 46", d: "214, 94, 77", sl: "#A83A2E", sd: "#D65E4D" },
+    { l: "44, 108, 95", d: "111, 167, 154", sl: "#2C6C5F", sd: "#6FA79A" },
+    { l: "53, 87, 125", d: "143, 176, 214", sl: "#35577D", sd: "#8FB0D6" },
+    { l: "142, 75, 38", d: "201, 138, 91", sl: "#8E4B26", sd: "#C98A5B" },
+    { l: "27, 29, 30", d: "232, 228, 218", sl: "#1B1D1E", sd: "#E8E4DA" }
+  ];
+
+  function pickDragTone() {
+    var area = el("drop-area");
+    var c = DRAG_COLORS[Math.floor(Math.random() * DRAG_COLORS.length)];
+    area.style.setProperty("--tone-l", c.l);
+    area.style.setProperty("--tone-d", c.d);
+    area.style.setProperty("--solid-l", c.sl);
+    area.style.setProperty("--solid-d", c.sd);
   }
 
-  // 这次拖进来那些文件的类型。items 只在 dragenter / dragover 里读得到；
-  // 读不到就退回 dt.types —— 但那张表里混着两种"不是文件类型"的串：
-  // 一是 "Files" 这种非 MIME 的串，二是拖一段网页里选中的文字时会带的
-  // text/plain、text/html、text/uri-list。所以只收含 "/" 的串、再排掉这三种
-  // "选中文字"的 MIME；过滤完是空的就当"信息不足"（上层不改状态），
-  // 拿它们去分类只能瞎猜（会闪一下「书稿已得」）。
-  var TEXT_DRAG = { "text/plain": 1, "text/html": 1, "text/uri-list": 1 };
-
-  function kindsOf(dt) {
-    var out = [];
-    if (!dt) { return out; }
-    if (dt.items && dt.items.length) {
-      for (var i = 0; i < dt.items.length; i++) {
-        var it = dt.items[i];
-        if (it && it.kind === "file" && it.type && it.type.indexOf("/") >= 0) {
-          out.push(it.type);
-        }
-      }
+  // 这次拖的到底是不是文件。悬停期只剩这一个可靠信号（实测，见上）：
+  // 拖文件时 types 里一定有 "Files"；拖网页里选中的文字、拖一个图片链接都没有。
+  // 没有就不表态 —— 不摆墨团、不改字。
+  function isFileDrag(dt) {
+    if (!dt || !dt.types) { return false; }
+    for (var i = 0; i < dt.types.length; i++) {
+      if (dt.types[i] === "Files") { return true; }
     }
-    if (!out.length && dt.types) {
-      for (var j = 0; j < dt.types.length; j++) {
-        var t = dt.types[j];
-        if (typeof t === "string" && t.indexOf("/") >= 0 && !TEXT_DRAG[t]) { out.push(t); }
-      }
-    }
-    return out;
+    return false;
   }
 
   // 墨心跟手：坐标量成相对 #drop-area 的像素值，写进两个 CSS 变量。
@@ -4442,7 +4769,7 @@
     }
   }
 
-  // state: "" 平时 / "book" 能处理的书 / "other" 明显不是书
+  // state: "" 平时 / "drag" 拖着文件（迎宾态：墨团染色 +「请松手」）
   function setDropState(state) {
     var area = el("drop-area");
     if (state) { area.setAttribute("data-drop", state); }
@@ -4455,17 +4782,17 @@
       ev.preventDefault();
       ev.stopPropagation();
       if (ev.dataTransfer) { ev.dataTransfer.dropEffect = "copy"; }
+      var area = el("drop-area");
       // 只在首屏吃这一手：拖着文件从别的屏路过时不该冒出一团墨
       if (document.body.getAttribute("data-view") !== "drop") { return; }
-      var kinds = kindsOf(ev.dataTransfer);
-      // 信息不足就不猜：types 里只剩 "Files" 这种非 MIME 串、或者只是拖了
-      // 一段网页选中文字时 kinds 是空的，这时改状态只会在松手瞬间闪一下
-      // 「书稿已得」。等真有文件 MIME 再表态。
-      if (!kinds.length) { return; }
-      var cls = classifyDrag(kinds);
-      // 认不出的类型不表态（不改状态，只让墨团继续跟手）：等松手后由 Python
-      // 按扩展名给结论，界面上就不会在拖 exe/json 时先亮一句「书稿已得」。
-      if (cls) { setDropState(cls); }
+      // 拖的不是文件（网页里选中的文字、拖一个图片链接）就不表态：
+      // 不摆墨团、不改字 —— 松手也不会发生什么。
+      if (!isFileDrag(ev.dataTransfer)) { return; }
+      // 一次拖拽只抽一次色：dragover 会连着来几十次，每次都重抽就成了跳色
+      if (area.getAttribute("data-drop") !== "drag") {
+        pickDragTone();
+        setDropState("drag");
+      }
       placeBloom(ev);
     }, false);
   });
@@ -4478,22 +4805,39 @@
     }, false);
   });
 
-  // 松手必须收墨。真实浏览器里 dragleave 不一定补得上：规范说只有"取消拖拽"
-  // 才立刻 fire dragleave，正常松手时它不保证来；dragend 又只派给被拖的那个
-  // 元素 —— 从资源管理器拖过来时那个元素在别的进程里，本页收不到。于是剩下的
-  // 只有 drop 这一条真会发生的事件。
-  //
-  // **只清态，不 preventDefault、不 stopPropagation**：拦默认行为与取绝对路径
-  // 都是 Python 端那个 DOMEventHandler 的活（见 gui/app.py 的 _register_drop），
-  // 这里多拦一手会把它挡掉。拖进来一段网页文字时 Python 侧取不到路径、静默
-  // return，这时就全靠这一行把墨团收回去。
+  // 松手必须收墨，但**不是立刻**：.txt 松手瞬间跳回「把书拖到此处」就是
+  // 无条件清态造成的（0.2.3 第 2 条）。现在的规矩：
+  //   已表态（迎宾态「请松手」）→ 保持到 __onDropPath 到达；
+  //   兜底 750ms：拖的是网页文字 / 图片时 Python 取不到路径，__onDropPath
+  //   根本不会来，到点自己清态并复位墨团；
+  //   完全没表态 → 立即清，不留残影。
+  // 仍然只清态，不 preventDefault、不 stopPropagation：拦默认行为与取绝对路径
+  // 都是 Python 端那个 DOMEventHandler 的活（见 gui/app.py 的 _register_drop）。
+  var dropClearTimer = null;
+
+  function scheduleDropClear() {
+    if (dropClearTimer) { clearTimeout(dropClearTimer); }
+    dropClearTimer = setTimeout(function () {
+      dropClearTimer = null;
+      setDropState("");
+    }, 750);
+  }
+
   document.addEventListener("drop", function () {
-    setDropState("");
+    var area = el("drop-area");
+    var state = area.getAttribute("data-drop");
+    if (state === "drag") {
+      scheduleDropClear();
+    } else {
+      setDropState("");
+    }
   }, false);
 
   // Python 端拿到绝对路径后调这个（utils.py 注入的 pywebviewFullPath 只在
   // 那一侧可见，JS 这里拿不到，只能由 Python 转回来）。
+  // 先取消兜底定时器：否则它会带着旧状态在导入页/错误页里再动一次。
   window.__onDropPath = function (path) {
+    if (dropClearTimer) { clearTimeout(dropClearTimer); dropClearTimer = null; }
     setDropState("");
     startImport(path);
   };
@@ -4580,6 +4924,18 @@
             "同时导出 AZW3（这台机器没装 Calibre，EPUB 不受影响）";
         }
       }).catch(function () { /* 版本号拿不到就不显示，不值得为此报错 */ });
+    }
+    // 关于页三条地址由后端给（白名单单源，ui.html 里不写死 URL）。
+    // 拿不到就保持页脚隐藏 —— 点了没反应的死链比不显示更糟。
+    if (a && a.about_links) {
+      a.about_links().then(function (res) {
+        if (!res || !res.links) { return; }
+        var l = res.links;
+        if (!l.xiaohongshu || !l.github || !l.ifdian) { return; }
+        aboutLinks = l;
+        var f = el("ab-footer");
+        if (f) { f.hidden = false; }
+      }).catch(function () {});
     }
     if (pendingPath) {
       var p = pendingPath;

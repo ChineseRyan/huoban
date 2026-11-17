@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>活板 · 爱发电二维码 · 终稿 v1（浅色朱印 / 深色灰纸墨码）</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#E6E3DA;color:#1B1D1E;
+  font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  padding:36px 24px 56px;
+}
+.wrap{max-width:1020px;margin:0 auto}
+header{margin-bottom:8px}
+h1{font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:.04em}
+.sub{font-size:12px;color:#6B6F72;line-height:1.8}
+h2{font-size:13px;font-weight:600;margin:30px 0 4px;letter-spacing:.06em}
+.one{font-size:12px;color:#6B6F72;margin:0 0 12px;line-height:1.7}
+.row{display:flex;gap:24px;flex-wrap:wrap}
+
+.stage{
+  position:relative;width:460px;height:470px;
+  display:flex;flex-direction:column;justify-content:flex-end;
+  background:var(--paper);color:var(--ink);
+  border:1px solid rgba(0,0,0,.08);
+}
+.stage.light{
+  --paper:#F1EFE8; --ink:#1B1D1E; --ink-3:#6F695F;
+  --seal:#A83A2E; --seal-border:rgba(168,58,46,0.4);
+  --rule:rgba(27,29,30,0.16);
+}
+.stage.dark{
+  --paper:#15181D; --ink:#E8E4DA; --ink-3:#8D8880;
+  --seal:#D65E4D; --seal-border:rgba(214,94,77,0.45);
+  --rule:rgba(232,228,218,0.16);
+}
+.tag{position:absolute;left:10px;top:8px;font-size:11px;letter-spacing:.1em;color:var(--ink-3)}
+.footer{
+  display:flex;align-items:center;flex-wrap:wrap;gap:14px;
+  border-top:1px solid var(--rule);
+  padding:18px 20px 24px;
+}
+.links{display:flex;align-items:center;gap:16px}
+.lnk{color:var(--ink);text-decoration:none;font-size:12.5px;letter-spacing:.02em}
+.lnk::after{content:"\2197";font-size:0.85em;margin-left:2px;vertical-align:0.15em;font-variant-emoji:text}
+.sep{width:1px;height:16px;background:var(--rule)}
+.btn{
+  margin-left:auto;min-width:120px;height:36px;padding:0 16px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:none;border:1px solid var(--seal-border);border-radius:0;
+  color:var(--seal);font-family:inherit;font-size:12px;cursor:pointer;
+}
+.btn span{letter-spacing:.08em;margin-right:-.08em;font-variant-numeric:tabular-nums}
+
+.overlay{position:absolute;right:20px;bottom:91px}
+.overlay img{display:block;width:148px}
+.overlay.slip img{width:180px}
+
+.note{
+  margin-top:34px;padding-top:16px;border-top:1px solid rgba(0,0,0,.12);
+  font-size:12px;line-height:1.95;color:#5A5E61;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>活板 · 爱发电二维码 · 终稿 v1</h1>
+  <div class="sub">浅色：朱印直接印在纸底，无容器；深色：灰纸签 #C9C3B6 + 墨码。悬停出现、移开收起，贴在「请喝杯茶」正上方。</div>
+</header>
+
+<div class="row">
+  <div class="stage light">
+    <span class="tag">浅色 · 朱印</span>
+    <div class="overlay"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASgAAAEoCAYAAADrB2wZAAAHOklEQVR4nO3dwZErNRhGUYZyPARAJA7RkRAACUEEPC2E6r9qn7OFN7Z7PLd68ZX65/PnH//89mDvv/7++dV/P/35d1//9L9f2b0+u6+/Mv39vf33U/f79BsA+C8CBWQJFJAlUECWQAFZAgVkCRSQ9Zresey6fQeye31P72h2dz7TO7Nd9R1Y/fV3r687KCBLoIAsgQKyBArIEiggS6CALIEC7t1Brdy+c9l9/d0d0PR5QvUd0PTObXpndlr979cdFJAlUECWQAFZAgVkCRSQJVBAlkABz91BPd3pHdPK9E7q9Of79utb30lNcwcFZAkUkCVQQJZAAVkCBWQJFJAlUEDW1++gTu9Mps9Dmj5PaeXbdz78mjsoIEuggCyBArIECsgSKCBLoIAsgQKeu4O6fccyfd7PadPv//bPXz/P6ul/v+6ggCyBArIECsgSKCBLoIAsgQKyBAq4dwc1vdOoO72Duf25dNP/fmX69U/7xN/fijsoIEuggCyBArIECsgSKCBLoIAsgQKyXvXzYE47vdOpu31nVN8pnX799+XfvxV3UECWQAFZAgVkCRSQJVBAlkABWQIFZL12dxrTz107/f5Of776Dul2059veqf1uXxH5g4KyBIoIEuggCyBArIECsgSKCBLoICsn+mdw9PPA5o+b+r0zm16Z/Xtv9/673/357uDArIECsgSKCBLoIAsgQKyBArIEigg67X7A07vOKZ3JtM7rPp5Wbt2r+/092PaJ75z231/7qCALIECsgQKyBIoIEuggCyBArIECnjueVC370jqO6TpHcrK9HlG09+/6b+fz/B5WCu73093UECWQAFZAgVkCRSQJVBAlkABWQIFZL2mdyT1ncftO6WV6fOs6t+/p++Y3vH37w4KyBIoIEuggCyBArIECsgSKCBLoIB7z4Oa3gFN7zRuf/+7pndK05//NN+vv3/5/t1BAVkCBWQJFJAlUECWQAFZAgVkCRSQ9fPtz/06fR7St++I6juf6e/n9HMF699fd1BAlkABWQIFZAkUkCVQQJZAAVkCBWS9pncSt+9Upp8bV/98u57+XL365/sM7xDdQQFZAgVkCRSQJVBAlkABWQIFZAkUkDX+XLyV6Z3P9M5reocyvdOZ3umtfPv1+Rz+fruDArIECsgSKCBLoIAsgQKyBArIEigg6/rn4k3veG5/fyvTO576Tuzp1/8050EB1xIoIEuggCyBArIECsgSKCBLoICs8WeK1XdEt+9MVm5/7l79+1Hfua1M//24gwKyBArIEiggS6CALIECsgQKyBIoIOt1+87n9A7m9I5l+v3fvpOZdvv3a9fpHZs7KCBLoIAsgQKyBArIEiggS6CALIECsl7TO6Zdu+9/escyff1Pv/70z6/vtE5/Pz7x67N6f+6ggCyBArIECsgSKCBLoIAsgQKyBArIGt+ITD8XbVf9vJ36c+tuvz4rt1+/9+HP7zwo4FoCBWQJFJAlUECWQAFZAgVkCRRw73lQ0zuI1b+fPs/ptOkdztN3cNO/39t9Dl9fd1BAlkABWQIFZAkUkCVQQJZAAVkCBWS9Vv/D9I5keod1+uff/ly9+g5u5duv/2nOgwIeS6CALIECsgQKyBIoIEuggCyBArJ+pp/bNb3TmDa9s5l+7tpp05+vvoN7x/9+3UEBWQIFZAkUkCVQQJZAAVkCBWQJFHDvDmr6uWP1ncjt1+/bd0a76t+Pz+Wf3x0UkCVQQJZAAVkCBWQJFJAlUECWQAFZRzcs/4fpHdPTTe/UTv/8p5+X9B5+f6d3cO6ggCyBArIECsgSKCBLoIAsgQKyBArIek2/gdM7ml3TO5vpHdDpfz/9+617X37e0+7PdwcFZAkUkCVQQJZAAVkCBWQJFJAlUEDW6+k7numdzbfvWKZ//vRz++o//7Td6+8OCsgSKCBLoIAsgQKyBArIEiggS6CArK8/i2d6h7Ty7TuY+uef3oHtqr8/d1BAlkABWQIFZAkUkCVQQJZAAVkCBWT91Hcmt+9wps+jqp/Hdfo8p+nzoqZ/P+/4eWQr7qCALIECsgQKyBIoIEuggCyBArIECsh6rf6H6Z3Iyu6OY3onM71jqe/gdq/P9Pe3vjNa2f3+7X5+d1BAlkABWQIFZAkUkCVQQJZAAVkCBdy7g3r6zmPl28/rqX/+p+/YPvGd2mnuoIAsgQKyBArIEiggS6CALIECsgQKeO4O6nb183ROPxdueue0Ut8Rnf58T39u44o7KCBLoIAsgQKyBArIEiggS6CALIECsr5+B7UyfZ7T9HlAp19/+jynXfWd1bTd9+8OCsgSKCBLoIAsgQKyBArIEiggS6CA5+6gbt9pTO9wpp8rV99xTb//6fOwVqafq7iye33cQQFZAgVkCRSQJVBAlkABWQIFZAkUcO8OanpHUTe901mZ3uHUd1Lf7jN8/Vav7w4KyBIoIEuggCyBArIECsgSKCBLoIDfqv4FbjiyBppOfC4AAAAASUVORK5CYII=" alt="爱发电二维码"></div>
+    <div class="footer">
+      <div class="links"><a class="lnk" href="#">小红书主页</a><span class="sep"></span><a class="lnk" href="#">GitHub 项目页</a></div>
+      <button class="btn" type="button"><span>请喝杯茶</span></button>
+    </div>
+  </div>
+  <div class="stage dark">
+    <span class="tag">深色 · 灰纸墨码</span>
+    <div class="overlay slip"><img src="data:image/png;base64,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" alt="爱发电二维码"></div>
+    <div class="footer">
+      <div class="links"><a class="lnk" href="#">小红书主页</a><span class="sep"></span><a class="lnk" href="#">GitHub 项目页</a></div>
+      <button class="btn" type="button"><span>请喝杯茶</span></button>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  二维码取自开发者提供的爱发电官方卡片：37×37 模组逐格提取后按整数倍重绘，逐模组比对零差异，
+  OpenCV 解码与原图一致（<code>afdian.com</code> 主页链接不变）。<br>
+  浅色：模块 <code>#A83A2E</code> 直接落在 <code>#F1EFE8</code> 纸底上（对比 5.4:1，实测可解码）。<br>
+  深色：纸签 <code>#C9C3B6</code>、模块墨色 <code>#1B1D1E</code>（对比 9.6:1），四周 4 模组静区；实测可解码。<br>
+  反白二维码（浅色模块压深底）实测解不出，所以深色必须保留一块浅底纸签，这一版已把它压到不刺眼的暖灰。
+</div>
+</div>
+</body>
+</html>

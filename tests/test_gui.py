@@ -1944,68 +1944,78 @@ def case_ui_is_one_lf_file():
 # 清态漏一条路径，拖到框外墨团会一直挂在屏幕上。
 
 
-def case_ui_drop_has_three_states():
-    """平时 / 拖书 / 拖了不是书的东西：三份文案都在，三态各有对应规则。
+def case_ui_drop_has_welcome_state():
+    """悬停只有一个迎宾态：一团跟手的墨 + 「请松手」。
 
-    三个 span 叠在同一个格子里交叉淡入，所以缺一个就是"那一态空着"。
+    2026-11-17 开发者定：拖拽悬停阶段读不到文件名（实测只有 types:["Files"]
+    与 item.type，getAsFile()/webkitGetAsEntry() 都是 null），书/非书判不出来，
+    所以不再分三档；拖文件进来只有这一句。
     """
     src = _ui_source()
-    for cls, text in (("t-idle", "把书拖到这里"), ("t-book", "书稿已得"),
-                      ("t-other", "非书也")):
-        assert '<span class="%s">%s</span>' % (cls, text) in src, \
-            "首屏少了「%s」那一态的文案" % text
-    # 平时态默认可见，两个拖入态默认藏起来
+    assert '<span class="t-idle">把书拖到这里</span>' in src, "首屏平时那句没了"
+    assert '<span class="t-drag">请松手</span>' in src, "迎宾态文案不对（应为「请松手」）"
+    # 平时态默认可见，迎宾态默认藏起来
     assert ".drop-title .t-idle { opacity: 1" in src, "平时态没有默认可见"
-    assert '#drop-area[data-drop="book"] .drop-title .t-book' in src, "拖书态没接上"
-    assert '#drop-area[data-drop="other"] .drop-title .t-other' in src, "非书态没接上"
+    assert '#drop-area[data-drop="drag"] .drop-title .t-drag' in src, "迎宾态没接上"
     # 换态时平时那句要退场，否则两句话叠在一起
-    assert '#drop-area[data-drop="book"] .drop-title .t-idle' in src, "拖书时没让平时那句退场"
+    assert '#drop-area[data-drop="drag"] .drop-title .t-idle' in src, "迎宾时平时那句没退场"
+    # 旧的三档判词一个都不许留
+    for gone in ("书稿已得", "非书也", "t-book", "t-other"):
+        assert gone not in src, "旧的三档判词还在：" + gone
 
 
-def case_ui_drop_classifies_by_mime_only():
-    """分类只认 dataTransfer 给的 MIME：图片/音视频/PDF 是"不是书"，其余都算书。
+def case_ui_drop_does_not_classify_during_drag():
+    """悬停期不许再按 MIME 判书/非书（0.2.3 新口径，2026-11-17）。
 
-    这条不是洁癖：dragover 阶段 pywebview 不给 JS 路径，Windows 注册表里
-    .text / .azw3 连 MIME 都没有 —— 想按扩展名判也判不了（TODO 第 3 组）。
-    所以判据里出现扩展名、或者出现绿/红那类通用语义，都算走偏。
+    实测：dragenter/dragover 里 getAsFile()/webkitGetAsEntry() 全是 null，
+    .lnk 连 MIME 都没有 —— 判了也是猜。判词退场，交给松手后的流程。
     """
     src = _ui_source()
-    # 认书白名单的每个成员都在（不钉整行原文：同一个格式在注册表里有好几种
-    # MIME 写法，往表里加成员不该让这条用例变红，删成员才该红）
-    book_rule = src[src.find("var BOOK_MIME"):src.find("var NOT_BOOK ")]
-    for mime in ("text\\/plain", "application\\/epub", "x-mobipocket-ebook"):
-        assert mime in book_rule, "「认得出是书」那支判据少了：" + mime
-    assert "var NOT_BOOK = /^(image|video|audio|font|text)\\//;" in src, "MIME 判据被改掉了"
-    # PDF 从 NOT_BOOK 挪到了 NOT_BOOK_OTHER（2026-11-09 三档分类），仍须判成"不是书"
-    other = src[src.find("var NOT_BOOK_OTHER"):]
-    other = other[:other.find(";")]
-    assert "pdf" in other, "PDF 那一支漏了"
-    # 两条"不是书"的路：items 里的真 MIME，以及读不到时的 dt.types 兜底
-    assert 'it.kind === "file"' in src, "没读 items 的 kind"
-    assert "dt.types" in src, "没留 dt.types 这条兜底"
-    # 判据只碰 MIME，不碰扩展名
-    rules = src[src.find("var BOOK_MIME"):src.find("function classifyDrag")]
-    for ext in (".txt", ".epub", ".azw3", '".pdf"'):
-        assert ext not in rules, "分类里混进了扩展名判断：" + ext
+    for gone in ("var BOOK_MIME", "var NOT_BOOK", "function classifyDrag", "function kindsOf"):
+        assert gone not in src, "悬停期的 MIME 判据还留着：" + gone
+    drag = src[src.find('["dragenter", "dragover"].forEach'):]
+    drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
+    assert "it.type" not in drag and "item.type" not in drag, "悬停处理仍读 MIME"
 
 
-def case_ui_drop_state_is_always_cleared():
-    """三条离开的路都要收墨，少一条墨团就挂在屏幕上。
+def case_ui_drop_state_holds_until_verdict():
+    """0.2.3 第 2 条：松手瞬间不许先跳回初始态，状态要撑到结论到达。
 
-    离开窗口（dragleave 带 relatedTarget 不算）、松手（drop）、拖拽取消（dragend）。
-    另外「只在首屏吃这一手」也得在：拖着文件从别的屏路过不该冒出一团墨。
+    根因：drop 监听无条件清态，而切屏要等 Python 回调 __onDropPath，
+    中间隔着一次 JS→Python→JS 往返，界面会露一下「把书拖到这里」。
+
+    三条要求（2026-11-14 口径，2026-11-17 迎宾态沿用）：
+      1. drop 时若当前已是迎宾态（data-drop="drag"），**保持**到 __onDropPath；
+      2. 兜底：600–800ms 内没等到 __onDropPath（拖的是网页文字/图片，Python
+         取不到路径）就自己清态并复位墨团；
+      3. __onDropPath 到达先取消定时器，别让它在下一屏里再动一次状态。
+    另外「完全没表态」（state 为空）时仍应立即清掉，不留残影。
     """
     src = _ui_source()
     assert 'area.removeAttribute("data-drop")' in src, "没有清掉 data-drop"
     assert 'document.body.setAttribute("data-drop-active", state ? "1" : "0")' in src, \
         "没复位 body 上的拖拽标记（主题按钮与「关于」的透明度就回不来）"
-    assert '__onDropPath = function (path) {\n    setDropState("");' in src, \
-        "松手进导入时没清态"
-    # 松手还有第二条路：Python 侧取不到绝对路径（拖进来一段网页文字、或者
-    # 认不出的东西）时 __onDropPath 根本不会被调，只剩 drop 事件这一条。
-    # 少了它，墨团与「书稿已得」会永远挂在首屏，主题按钮也一直淡着。
-    assert 'document.addEventListener("drop", function () {\n    setDropState("");' in src, \
-        "drop 之后没有清态：取不到路径时墨团会一直挂在首屏"
+
+    i = src.find("// 松手必须收墨")
+    assert i >= 0, "找不到松手那一段（注释被删了？）"
+    block = src[i:i + 2200]
+
+    assert "var dropClearTimer = null;" in block, "没有兜底定时器的变量"
+    assert 'var state = area.getAttribute("data-drop");' in block, \
+        "drop 时没读当前状态，无法判断该不该保持"
+    assert 'if (state === "drag")' in block, \
+        "迎宾态没有保持状态（又回到无条件清态）"
+    m = re.search(r"setTimeout\(function \(\) \{[^}]*\}, (\d+)\);", block)
+    assert m, "没有挂兜底定时器"
+    assert 600 <= int(m.group(1)) <= 800, "兜底定时器不在 600–800ms：" + m.group(1)
+    assert 'setDropState("");' in block, "没表态时没有立即清态"
+
+    j = src.find("window.__onDropPath = function (path) {")
+    assert j >= 0, "找不到 __onDropPath"
+    tail = src[j:j + 500]
+    assert "clearTimeout(dropClearTimer)" in tail, "__onDropPath 没取消兜底定时器"
+    assert 'setDropState("");' in tail, "松手进导入时没清态"
+
     assert 'if (name === "dragleave" && ev.relatedTarget) { return; }' in src, \
         "子元素之间移动会误清态（或反之根本没兜底）"
     assert 'document.body.getAttribute("data-view") !== "drop"' in src, \
@@ -2015,18 +2025,32 @@ def case_ui_drop_state_is_always_cleared():
         "墨团没跟光标"
 
 
-def case_ui_drop_uses_no_generic_green_red():
-    """拖放不借绿/红这类通用软件语义，只用纸上已有的两支：印色与墨色。
+def case_ui_drag_colors_come_from_cover_palette():
+    """五支拖拽色必须来自封面色板 + 墨，深浅两档齐全（2026-11-17 定）。
 
-    这是设计定稿里写死的一条（TODO 第 3 组），不是风格偏好。
+    不是「随便找五个好看的颜色」：四支印色取自 `gui/cover.py` 的六套配色，
+    用户之后挑封面会见到同一套；墨是兜底色。深浅各一档，跟着主题走。
     """
     src = _ui_source()
-    head = src[src.find("#drop-area .bloom"):]
-    head = head[:head.find("@keyframes ripple") + 400]
-    for bad in ("#00", "#0f0", "#f00", "green", "red", "#22c55e", "#ef4444"):
-        assert bad not in head, "拖放段里出现了通用语义色：" + bad
-    assert "--bloom-book" in head and "--bloom-other" in head, \
-        "两团墨没用印色/墨色那两支变量"
+    m = re.search(r"var DRAG_COLORS = \[(.+?)\n  \];", src, re.S)
+    assert m, "找不到五色表 DRAG_COLORS（或被改成了别处）"
+    block = m.group(1).lower()
+
+    # 浅色档：四支印色 + 墨
+    lights = ("#a83a2e", "#2c6c5f", "#35577d", "#8e4b26", "#1b1d1e")
+    # 深色档：提亮后的同一套
+    darks = ("#d65e4d", "#6fa79a", "#8fb0d6", "#c98a5b", "#e8e4da")
+    for hexv in lights + darks:
+        assert hexv in block, "五色表少了这一档：" + hexv
+
+    # 四支印色必须真在封面色板里（同源，不是新造）
+    cover = (ROOT / "gui" / "cover.py").read_text(encoding="utf-8")
+    for hexv in ("#2C6C5F", "#35577D", "#8E4B26"):
+        assert hexv in cover, "这支色不在封面色板里：" + hexv
+
+    # 不许出现通用软件的语义色
+    for bad in ("#00ff00", "#ff0000", "#22c55e", "#ef4444"):
+        assert bad not in block, "拖拽段里出现了通用语义色：" + bad
 
 
 def case_ui_drop_first_frame_snaps_into_place():
@@ -2069,157 +2093,72 @@ def case_ui_drop_first_frame_snaps_into_place():
         "不是首次也会关过渡，跟手就不跟了"
 
 
-def case_ui_drop_office_docs_are_not_books():
-    """办公文档拖进来当场就显示「非书也」，且不许误伤 EPUB（0.2.2 第 1 条）。
+def case_ui_drag_office_docs_get_no_verdict():
+    """办公文档拖进来也不再单独判「非书也」：悬停只有迎宾态。
 
-    以前 Word/RTF 这类只在 Python 那边按后缀拒，界面上先闪一下「书稿已得」，
-    再翻成错误页 —— 看着像工具先认对后认错。现在办公文档的 MIME 也进
-    「不是书」的判据：纯 MIME，一个扩展名都不写（dragover 阶段拿不到扩展名）。
-    application/epub+zip 不在其中 —— 那恰恰是要收的那种书。
-
-    判据从源码里抽出来，拿真 MIME 逐条试：以前把正则原样抄进测试做文本比对，
-    判据写错了（漏一族、误伤 EPUB）测试照样绿。
+    2026-11-17 起悬停期不分类，办公文档和别的文件走同一条路：迎宾 → 松手 →
+    Python 按后缀拒。这条钉住「不许偷偷把办公文档的判词加回来」。
     """
     src = _ui_source()
-    m = re.search(r"var NOT_BOOK_DOC = /(.+?)/;", src)
-    assert m, "办公文档的 MIME 判据被拿掉了"
-    pattern = m.group(1)
-    assert "epub" not in pattern, "EPUB 被卷进了「不是书」"
-    rx = re.compile(pattern)
-    hits = (
-        "application/msword",                                                        # .doc
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",   # .docx
-        "application/rtf",                                                           # .rtf
-        "application/vnd.oasis.opendocument.text",                                   # .odt
-        "application/vnd.ms-excel",                                                  # .xls
-        "application/vnd.ms-powerpoint",                                             # .ppt
-        "application/kswps",                                                         # .wps（金山）
-        "application/vnd.ms-works",                                                  # .wps（MS Works）
-    )
-    for mime in hits:
-        assert rx.search(mime), "这个办公文档 MIME 没被判成「不是书」：" + mime
-    misses = ("application/epub+zip", "text/plain", "application/zip",
-              "application/pdf", "image/png")
-    for mime in misses:
-        assert not rx.search(mime), "这个不该被卷进「不是书」判据：" + mime
-    body = src[src.find("function classifyDrag"):src.find("function kindsOf")]
-    for piece in ("NOT_BOOK.test(t)", "NOT_BOOK_DOC.test(t)", "NOT_BOOK_OTHER.test(t)"):
-        assert piece in body, "「不是书」的判据没用上：" + piece
-    # 先认书再认不是书：反过来的话 epub（application/epub+zip 与 zip 都不沾）
-    # 这类边界会在以后加规则时悄悄翻面
-    assert body.find("BOOK_MIME.test(t)") >= 0 and \
-        body.find("BOOK_MIME.test(t)") < body.find("NOT_BOOK.test(t)"), \
-        "先判「不是书」再判「是书」了"
-    for ext in (".docx", ".doc", ".rtf", ".wps", ".xlsx", ".pptx"):
-        assert ext not in body, "分类里混进了扩展名判断：" + ext
-    assert "application/epub+zip" not in body, "EPUB 的 MIME 进了「不是书」判据"
+    for gone in ("NOT_BOOK_DOC", "msword", "openxmlformats", "kswps",
+                 "oasis.opendocument", "vnd.ms-excel", "vnd.ms-powerpoint"):
+        assert gone not in src, "办公文档的 MIME 判据又回来了：" + gone
 
 
-def case_ui_drop_never_guesses_without_mime():
-    """拿不到真 MIME 时宁可不动：不闪「书稿已得」（0.2.2 第 3 条）。
+def case_ui_drag_without_files_type_is_silent():
+    """拖的不是文件（网页选中文字）就不表态：不摆墨团、不改字。
 
-    dt.types 里常常只剩 "Files" 这种非 MIME 串。以前照单收下当「可能是书」，
-    松手瞬间先亮一句「书稿已得」再翻错误页 —— 一闪而过，用户以为程序先认对
-    后认错。现在 kindsOf 两条路都只收含 "/" 的串；kinds 为空就在
-    dragenter/dragover 里直接返回，不改状态、不摆墨团。
+    悬停期只剩一个可靠信号：types 里有没有 "Files"（实测：拖文件一定有；
+    拖网页里选中的文字没有）。没有就返回。
     """
     src = _ui_source()
-    kinds = src[src.find("function kindsOf"):src.find("function placeBloom")]
-    assert 'it.type && it.type.indexOf("/") >= 0' in kinds, \
-        "items 里的空 MIME 没滤掉"
-    assert 'typeof t === "string" && t.indexOf("/") >= 0' in kinds, \
-        "dt.types 里的「Files」没滤掉"
+    fn = src[src.find("function isFileDrag"):src.find("function placeBloom")]
+    assert '"Files"' in fn, "没有按 Files 判「是不是拖文件」"
+    assert "dt.types" in fn, "没读 dt.types"
     drag = src[src.find('["dragenter", "dragover"].forEach'):]
     drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
-    i_kinds = drag.find("var kinds = kindsOf(ev.dataTransfer);")
-    i_guard = drag.find("if (!kinds.length) { return; }")
-    i_set = drag.find("setDropState(cls)")
-    assert i_kinds >= 0 and i_guard >= 0 and i_set >= 0, "拖拽主循环的三步缺了"
-    assert i_kinds < i_guard < i_set, "信息不足时没在改状态之前返回"
+    i_guard = drag.find("if (!isFileDrag(ev.dataTransfer)) { return; }")
+    i_set = drag.find('setDropState("drag")')
+    assert i_guard >= 0 and i_set >= 0, "拖拽主循环缺了「判是不是文件」或「改状态」"
+    assert i_guard < i_set, "信息不足时没在改状态之前返回"
+    assert drag.find("placeBloom(ev)") > i_guard, "没文件的拖拽也在摆墨团"
 
 
 def case_ui_drag_page_text_is_not_a_book():
-    """拖一段网页里选中的文字，不许再闪「书稿已得」（0.2.2 补修）。
+    """选中文字不带 "Files"：走同一条「不表态」的路（0.2.3 新口径）。
 
-    在浏览器里选中一段文字拖过来，dataTransfer.types 会带 text/plain、
-    text/html、text/uri-list 这几种「不是文件」的 MIME。它们含 "/"，
-    所以以前会被当成「可能是书」，松手瞬间亮一句「书稿已得」，紧接着又翻成
-    错误页 —— 用户看到的是先认对后认错。现在这三种在 dt.types 那条回退路里
-    被排掉；排完是空的就当信息不足，上面原有的「空了就返回」会兜住，不改状态。
-    items 那条路按 kind === "file" 判，选中文字根本不是文件，不必也不该在
-    那里排 MIME。
+    旧实现在 dt.types 里排 text/plain 等名单；现在只看有没有 "Files"，
+    名单连同 MIME 判据一起退场 —— 这条钉住名单不许默默回来。
     """
     src = _ui_source()
-    assert 'var TEXT_DRAG = { "text/plain": 1, "text/html": 1, "text/uri-list": 1 };' in src,         "「选中文字」的 MIME 名单被改掉了"
-    kinds = src[src.find("var TEXT_DRAG"):src.find("function placeBloom")]
-    assert "!TEXT_DRAG[t]" in kinds, "dt.types 回退路没排掉选中文字"
-    items = kinds[kinds.find("if (dt.items && dt.items.length)"):
-                  kinds.find("if (!out.length && dt.types)")]
-    assert "TEXT_DRAG" not in items, "items 那条路不该用 MIME 名单兜底（它按 kind 判）"
-    # 排干净之后是空集合，必须仍然走「信息不足不改状态」那条路
-    drag = src[src.find('["dragenter", "dragover"].forEach'):]
-    drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
-    assert drag.find("if (!kinds.length) { return; }") < \
-        drag.find("classifyDrag(kinds)"), "空集合时没在改状态之前返回"
+    assert "TEXT_DRAG" not in src, "选中文字的老 MIME 名单还留着"
+    assert "text/plain" not in src, "还在按 MIME 认书"
 
 
-def case_ui_drag_exe_and_json_are_not_books():
-    """拖 exe / json 进来也要归「非书也」，同时不能把真书挡在门外（2026-11-09 反馈）。
+def case_ui_drag_exe_and_json_get_no_verdict():
+    """exe / json 不再单独判：悬停只有迎宾态，松手后由 Python 拒。
 
-    以前 isNotBook() 只排图片/音视频/办公文档/PDF，其余一律当"可能是书"，
-    于是 .exe（application/x-msdownload）、.json（application/json）拖进虚框
-    会亮一句「书稿已得」。现在改成三档：认得出是书 → book；认得出不是书 →
-    other；两边都认不出 → 不表态（等松手后由 Python 按扩展名给结论）。
-    这里不重写一支 JS 解释器，只把 ui.html 里那四条正则原文抠出来用 Python
-    的 re 逐条验 MIME 表 —— 判错的风险全在正则上，不在循环上。
+    2026-11-17 起判词退场；这条钉住 MIME 黑名单不许加回来。
     """
-    import re as pyre
     src = _ui_source()
+    for gone in ("x-msdownload", "application/json", "x-msi", "zip-compressed",
+                 "isNotBook"):
+        assert gone not in src, "MIME 黑名单又回来了：" + gone
 
-    def grab(name: str) -> "pyre.Pattern[str]":
-        i = src.find("var " + name + " = /")
-        assert i >= 0, f"{name} 不见了（用例已失去判断力，先修用例）"
-        line = src[i:src.find(";", i)]
-        body = line[line.find("/") + 1:line.rfind("/")]
-        return pyre.compile(body)
 
-    BOOK_MIME = grab("BOOK_MIME")
-    NOT_BOOK = grab("NOT_BOOK")
-    NOT_BOOK_DOC = grab("NOT_BOOK_DOC")
-    NOT_BOOK_OTHER = grab("NOT_BOOK_OTHER")
+def case_ui_drag_color_is_stable_within_one_drag():
+    """一次拖拽只抽一次色：dragover 不许重抽（跳色像故障）。
 
-    def classify(mime: str) -> str:
-        # 与 classifyDrag 同序：先认书，再认不是书，都不中就空串
-        if BOOK_MIME.search(mime):
-            return "book"
-        if NOT_BOOK.search(mime) or NOT_BOOK_DOC.search(mime) or NOT_BOOK_OTHER.search(mime):
-            return "other"
-        return ""
-
-    # 用户这次反馈的两类：exe 与 json，必须归"不是书"
-    assert classify("application/x-msdownload") == "other", "exe 又被当书了"
-    assert classify("application/json") == "other", "json 又被当书了"
-    # 顺手钉住其余常见"不是书"
-    for mime in ("image/png", "video/mp4", "audio/mpeg", "application/pdf",
-                 "text/html", "text/csv", "application/zip",
-                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
-        assert classify(mime) == "other", f"{mime} 应归「非书也」"
-    # 真书与"认不出"这两头都不能被顺手改了
-    # 真书这一档要收下同一个格式的各种写法：本机注册表里 .epub 报的是
-    # application/epub、.mobi 报 application/mobi，只认规范写法会把真书降成"不表态"
-    for mime in ("text/plain", "application/epub", "application/epub+zip",
-                 "application/mobi", "application/x-mobi8-ebook",
-                 "application/x-mobipocket-ebook", "application/vnd.amazon.ebook"):
-        assert classify(mime) == "book", f"{mime} 应认成书"
-    for mime in ("application/octet-stream", "application/x-unknown-thing"):
-        assert classify(mime) == "", f"{mime} 认不出来时不该表态"
-
-    # 结构：认不出的沉默、认出的才改状态（否则 exe 又会在松手前先亮书稿已得）
+    抽色挂在「还没进迎宾态」这个守卫里；整段拖拽 data-drop 一直是 "drag"，
+    所以只会抽一次。
+    """
+    src = _ui_source()
     drag = src[src.find('["dragenter", "dragover"].forEach'):]
     drag = drag[:drag.find('["dragleave", "dragend"].forEach')]
-    assert "var cls = classifyDrag(kinds);" in drag, "拖拽处理没走三档分类"
-    assert "if (cls) { setDropState(cls); }" in drag, "认不出来时仍在改状态"
-    assert "isNotBook" not in src, "旧的二档 isNotBook 还留着，两套判据会互相打架"
+    assert drag.count("pickDragTone();") == 1, "抽色没有限制在一次"
+    i_pick = drag.find("pickDragTone();")
+    i_guard = drag.find('if (area.getAttribute("data-drop") !== "drag")')
+    assert 0 <= i_guard < i_pick, "没有「已在迎宾态就不重抽」的守卫"
 
 
 def case_ui_font_checkbox_keeps_the_users_choice():
@@ -2486,6 +2425,179 @@ def case_error_page_wires_the_continue_button():
     assert "a.force_import(jobId)" in src
 
 
+def case_error_page_body_keeps_jargon_in_the_detail():
+    """出错页的正文说人话：实现术语与英文堆栈只能进「技术细节」（2026-11-17 判过）。
+
+    正文（`e-body`）回答的是「我该做什么」；pywebview、job_poll、hooks、轮询这些
+    是维护者的话，堆栈更是。它们全归 opts.detail 那个折角，正文只留能照做的动作。
+    注意：断言拦的是「作为正文出现」，不是把这些话从文件里删掉 —— 挪进技术细节
+    之后它们仍该在，删掉反而是把证据丢了。
+    """
+    src = _ui_source()
+    # 正文位 = 那句话后面紧跟 ", "（第二个实参），技术细节位 = 前面跟着 detail:
+    for gone in ('"pywebview 的桥没有注入成功。请重启程序',
+                 '"轮询出错"',
+                 '"后端没有回应"',
+                 '"后端返回了空的结果。"',
+                 '"job_poll 返回了空值。",',
+                 'showError("打不开文件选择框", String(err)',
+                 'showError("打不开这本书", String(err)',
+                 'showError("打不开复核页", String(err)'):
+        assert gone not in src, "正文里还留着术语或堆栈：" + gone
+    assert "pywebview 的桥没有注入成功" in src, "术语被删了，而不是挪进技术细节"
+    assert 'detail: "job_poll 返回了空值。"' in src, \
+        "job_poll 那句被删了，而不是挪进技术细节"
+    assert src.count("detail: String(err)") >= 3, \
+        "英文堆栈没有挪进技术细节（至少三处 catch 分支）"
+
+
+def case_error_page_detail_box_lines_up_with_the_body():
+    """技术细节的灰框要和正文左对齐，矮窗下只留外层一层滚动（2026-11-17 判过）。
+
+    正文被那根 2px 印色竖线与 18px 间距推到右边，而 .err-more 是 .err-head 的兄弟，
+    默认贴着 .err-main 的左缘 —— 差的正好是这 20px。矮窗下 pre 自己还带 max-height，
+    和外层 .scroll 叠成两层滚动，用户不知道该滚哪一个。
+    """
+    src = _ui_source()
+    assert ".err-more { margin-top: 16px; margin-left: 20px; }" in src, \
+        "技术细节没跟正文左对齐（差 20px）"
+    assert ".err-more pre { max-height: none; }" in src, \
+        "矮窗下 pre 还限高：会出现两层滚动"
+    assert "max-height: 120px" not in src, "矮窗下 pre 的旧限高还在"
+
+
+def case_error_page_exits_are_a_ladder():
+    """三颗出口按后果分档：「仍然继续」不再是虚线小字（2026-11-17 判过）。
+
+    这屏唯一会改结果的动作是「仍然继续」（明知整本一行还要做），原来和
+    「打开所在目录」（只是看一眼）同为虚线小字 —— 后果最重的看起来最轻。
+    现在它提一档成描边按钮，和下面那行小字之间拉开 7px。
+    """
+    src = _ui_source()
+    assert '<button class="ghost" id="btn-err-continue"' in src, \
+        "「仍然继续」还是虚线小字"
+    assert '<button class="dashed" id="btn-err-reveal"' in src, \
+        "「打开所在目录」该留在最轻那一档"
+    assert "#view-error #btn-err-reveal { margin-top: 7px; }" in src, \
+        "两档之间没有拉开间距"
+
+
+def case_error_page_body_splits_paragraphs():
+    """正文按空行拆成段：段距交给 CSS，不再靠一个空行撑开（2026-11-17 判过乙）。
+
+    原来是 `white-space: pre-wrap` + 文案里的空行，段间 25–26px；四段就吃掉 77px，
+    720×520 上正文一长就要滚半天。拆成 `<p class="err-p">` 之后段距是一个值，
+    长文案才收得回来。段内的单换行仍按换行显示（`.err-p` 自己 pre-wrap），文案口径不变。
+    """
+    src = _ui_source()
+    assert "function errBody(node, body)" in src, "没有拆段的渲染函数"
+    assert 'errBody(el("e-body"), body);' in src, "showError 还在用 text() 直填正文"
+    assert 'text(el("e-body"), body || "")' not in src, "旧的直填还在"
+    assert r"split(/\n{2,}/)" in src, "拆段没按空行切"
+    assert 'p.className = "err-p";' in src, "段落没有统一的类名"
+
+
+def case_error_page_spacing_is_one_scale():
+    """出错页的段距收成一档：标题下 6 / 段间 12 / 正文到技术细节 16（矮窗 12）。
+
+    2026-11-17 开发者判「收窄」：原值 10 / 25–26（空行）/ 18（矮窗）。
+    这几个数不是为这一屏新造的孤例 —— 6 与 12 都在文件里已有的档位里
+    （9 / 10 / 12 / 14 / 16 都在用），技术细节那 16 与矮窗 12 同理。
+    """
+    src = _ui_source()
+    css = src[:src.find("</style>")]
+
+    def block(sel):
+        i = css.find(sel + " {")
+        assert i >= 0, "找不到样式块：" + sel
+        j = css.find("}", i)
+        return css[i:j]
+
+    para = block(".err-body .err-p")
+    assert "margin: 0 0 12px;" in para, "段距不是 12px"
+    assert "white-space: pre-wrap;" in para, "段内换行没保住"
+    assert "margin: 0 0 6px;" in block(".err-title"), "标题下没有收到 6px"
+    assert "margin-top: 16px;" in block(".err-more"), "正文到技术细节不是 16px"
+    assert ".err-more { margin-top: 12px; }" in css, "矮窗下技术细节没收到 12px"
+    assert "margin: 0 0 10px;" not in css, "标题下的旧值还在"
+    assert ".err-more { margin-top: 18px; }" not in css, "矮窗下技术细节的旧值还在"
+
+
+def case_ui_context_menu_only_on_the_three_boxes():
+    """右键菜单只挂在书名 / 作者 / 输出目录三个框上（2026-11-17 开发者定范围）。
+
+    正式包里全局右键是关的（pywebview 把右键菜单、浏览器快捷键、DevTools 绑在同一个
+    debug 开关上，见 `gui/app.py` 的 `_debug()`）—— 这一条不许把那道闸打开，所以入口是
+    「这三个 id 之一」，不是「任何输入框」也不是「整页」。
+    触发也不押 `contextmenu`：WebView2 关掉默认菜单之后它派不派发，各家说法不一。
+    """
+    src = _ui_source()
+    assert 'var CTX_IDS = ["m-title", "m-author", "m-outdir"];' in src, "三个框的名单不对"
+    head = src[src.find("var CTX_IDS"):]
+    assert '"m-lang"' not in head[:head.find(";")], "语言框不该进来"
+    assert "if (ev.button !== 2)" in src, "没有按右键（button 2）判"
+    assert "CTX_IDS.indexOf(t.id) < 0" in src, "没有拿 id 名单挡住别的元素"
+    assert 'document.addEventListener("mousedown"' in src, "没有在 mousedown 上接右键"
+    assert "ctxOpen(t, ev.clientX, ev.clientY)" in src, "右键没有把菜单放到光标处"
+    # contextmenu 只做兜底，不许在那里开菜单
+    tail = src[src.find('document.addEventListener("contextmenu"'):]
+    assert "ctxOpen" not in tail[:240], "contextmenu 里又去开菜单了（它只该 preventDefault）"
+
+
+def case_ui_context_menu_is_the_apps_own_paper():
+    """菜单必须是自家的纸墨，不是系统弹层（2026-11-17 开发者明确要求）。
+
+    粗看要像这身纸墨长出来的一块：纸底、墨字、印色当悬停，深浅交给变量跟着主题走。
+    所以这一块里不许出现写死的白 / 灰 —— 那就是 Windows 那套弹层的样子。
+    """
+    src = _ui_source()
+    i = src.find(".ctx-menu {")
+    j = src.find(".ctx-menu button:disabled")
+    assert i >= 0 and j > i, "找不到 .ctx-menu 的样式块"
+    css = src[i:j]
+    for need in ("background: var(--paper)", "border: 1px solid var(--rule)",
+                 "color: var(--ink)", "font-family: var(--sans)"):
+        assert need in css, "菜单没走界面自己的变量：" + need
+    assert "var(--seal-tint)" in src[src.find(".ctx-menu button:hover"):], \
+        "悬停没有印色那一层"
+    low = css.lower()
+    for bad in ("#fff", "#ffffff", "white", "#f0f0f0", "#e5e5e5", "#f3f3f3"):
+        assert bad not in low, "菜单里出现系统弹层的颜色：" + bad
+
+
+def case_ui_context_menu_paste_degrades_without_api():
+    """拿不到 paste_text 时「粘贴」置灰、不隐藏（契约里的可缺省动作）。
+
+    隐藏会让菜单在两次右键里位置跳一下，也让人以为这功能不存在；置灰是
+    「这台机器上暂时按不动」。「全选」不依赖后端，照常可用。
+    """
+    src = _ui_source()
+    assert 'el("ctx-paste").disabled = !(a && a.paste_text);' in src, \
+        "没有按后端有没有 paste_text 置灰"
+    assert 'el("ctx-paste").hidden' not in src, "「粘贴」被藏起来了，应该置灰"
+    assert 'el("ctx-selectall").addEventListener' in src, "「全选」没有接上"
+    assert "t.select();" in src, "「全选」没有真去选"
+    # 粘贴要把文本插到光标处并替换选中，还要让既有监听（重排字号 / 更新摘要）跟着跑
+    assert "t.setSelectionRange(pos, pos)" in src, "粘完没把光标放到插入点之后"
+    assert 'new Event("input", { bubbles: true })' in src, \
+        "程序改值没有派 input：字号不重排、输出目录摘要不更新"
+
+
+def case_ui_context_menu_closes_on_escape_and_view_change():
+    """菜单不许赖在屏幕上：Esc、点别处、换屏三处都要收。
+
+    它是 fixed 浮层，换屏（setView）不带走它就会悬在下一屏上 —— 那正是
+    「界面没排完」的样子。
+    """
+    src = _ui_source()
+    assert 'if (ev.key === "Escape") { ctxClose(); }' in src, "Esc 收不掉菜单"
+    assert "if (m && !m.hidden && !m.contains(ev.target)) { ctxClose(); }" in src, \
+        "点别处收不掉菜单"
+    body = src[src.find("function setView("):]
+    body = body[:body.find("\n  }")]
+    assert "ctxClose();" in body, "换屏时没把菜单收走"
+
+
 # ---------- 验收期补：清洗等待页必须飘这本书自己的话 ----------
 
 
@@ -2559,6 +2671,312 @@ def case_ui_clean_wait_screen_uses_real_book_lines():
     assert "function normalizeFeed(res)" in src
 
 
+# ---------- 右键粘贴：`paste_text`（剪贴板由 Python 读） ----------
+#
+# 契约（与 UI设计肥鱼 定的交界件）：无入参；成功 {"text": "..."}；剪贴板为空或
+# 只有非文本 → {"text": ""}（**空不是失败**）；读不到 → {"error": "..."}。
+# 可缺省方法：界面用 `a.paste_text &&` 守卫，缺席时「粘贴」置灰、「全选」照常。
+# 剪贴板必须由 Python 读：spike 结论是 pywebview 没接 PermissionRequested，
+# navigator.clipboard 的权限与安全上下文都不确定。
+
+
+def case_paste_text_returns_the_clipboard_text():
+    """读到什么就给什么，不裁剪、不改写（书名里可能有空格与全角标点）。"""
+    import gui.api as api_mod
+
+    want = "　《三体》 刘慈欣　"
+    old = api_mod._read_clipboard
+    api_mod._read_clipboard = lambda: want
+    try:
+        out = Api().paste_text()
+    finally:
+        api_mod._read_clipboard = old
+    assert out == {"text": want}, out
+
+
+def case_paste_text_empty_clipboard_is_not_an_error():
+    """空剪贴板 / 只有图片 → 空串，且**不许**变成失败（菜单会误置灰成"坏了"）。"""
+    import gui.api as api_mod
+
+    old = api_mod._read_clipboard
+    for empty in ("", None):
+        api_mod._read_clipboard = lambda e=empty: "" if e is None else e
+        try:
+            out = Api().paste_text()
+        finally:
+            api_mod._read_clipboard = old
+        assert out.get("text") == "", out
+        assert "error" not in out, f"空剪贴板被当成失败了：{out}"
+
+
+def case_paste_text_failure_returns_words_not_exception():
+    """被别的程序占着时返回人话，不抛异常（界面据此把「粘贴」置灰）。"""
+    import gui.api as api_mod
+
+    def boom():
+        raise OSError("剪贴板被别的程序占着")
+
+    old = api_mod._read_clipboard
+    api_mod._read_clipboard = boom
+    try:
+        out = Api().paste_text()
+    finally:
+        api_mod._read_clipboard = old
+    assert out.get("error"), out
+    assert "剪贴板" in out["error"], out
+    assert "Traceback" not in out["error"], out
+
+
+def case_paste_text_reads_the_windows_clipboard_for_real():
+    """真读一次本机剪贴板：返回的一定是 str，且不抛。
+
+    只断言类型与"不炸"：剪贴板里此刻是什么由机器决定，用例不能依赖它。
+    这一条同时证明「用的是 Python 侧实现」——桩被移除后仍然出结果。
+    """
+    out = Api().paste_text()
+    assert isinstance(out, dict), out
+    if "error" in out:
+        assert out["error"], out
+    else:
+        assert isinstance(out.get("text"), str), out
+
+
+# ---------- 清洗中途检查点：取消在下一次回调内生效（todo/0.3.0.md） ----------
+#
+# 以前 `clean_file` 是一次同步调用、中途没有检查点，点「取消」只能等它跑完，
+# 几十秒后书上完了才认账。现在 worker 传一个闭包给 `clean_file`，每约 2000 行
+# 查一次旗子。这几条用例钉住「旗子真被查到」「取消被认成取消而不是失败」。
+
+
+def _checkpoint_book(tmp: Path, lines: int = 40) -> Path:
+    """造一本小书：只用它过格式/大小闸，清洗本身由桩替换。"""
+    src = tmp / "检查点.txt"
+    body = ["第一章　起", ""]
+    body += ["正文一段，以句号收尾。" if i % 2 else "" for i in range(lines)]
+    src.write_text("\n".join(body) + "\n", encoding="utf-8")
+    return src
+
+
+def _run_with_fake_clean(api_mod, *, total: int, cancel_at: int, path: Path):
+    """替换 `clean_file`，让检查点按给定节奏回调；返回 (job, raised, steps)。"""
+    job = Job(job_id="t-checkpoint")
+    session = Session(source=path, adjust=None)
+    steps: list[tuple[str, int, int]] = []
+
+    def fake_clean_file(src, *, adjust=None, on_step=None):
+        assert on_step is not None, "worker 没把 on_step 传给 clean_file"
+        for i in range(1, total + 1):
+            if i == cancel_at:
+                job.cancel_requested = True
+            # 先记账再回调：回调正是取消抛出的地方，抛出去之后这一行就不会再回来，
+            # 而"停在哪一行"恰恰要靠这一步记下来。
+            steps.append(("scan", i, total))
+            on_step(i, total, "scan")
+        raise AssertionError("旗子立了，清洗却一路跑到底")
+
+    old = api_mod.clean_file
+    api_mod.clean_file = fake_clean_file
+    try:
+        raised = None
+        try:
+            Api()._run_import(job, session)
+        except BaseException as exc:  # noqa: BLE001
+            raised = exc
+    finally:
+        api_mod.clean_file = old
+    return job, raised, steps
+
+
+def case_cancel_during_clean_fires_at_the_next_checkpoint():
+    """立旗子在 7000 行，必须在下一个检查点（8000）就停，不是跑满 9000。"""
+    import gui.api as api_mod
+
+    root = _tmp_root("checkpoint")
+    src = _checkpoint_book(root)
+    job, raised, steps = _run_with_fake_clean(
+        api_mod, total=9000, cancel_at=7000, path=src
+    )
+
+    assert isinstance(raised, api_mod.Cancelled), (
+        "取消没被认成 Cancelled，而是：%r" % (raised,)
+    )
+    expect = ((7000 // api_mod.CANCEL_CHECK_LINES) + 1) * api_mod.CANCEL_CHECK_LINES
+    reached = steps[-1][1]
+    assert reached == expect, (
+        f"该在下一个检查点 {expect} 停下，实际停在 {reached}（共跑了 {len(steps)} 行）"
+    )
+    assert steps[-1][0] == "scan", steps[-1]
+    # 卡点要能看见：跑到的位置记在 job 上
+    assert str(expect) in job.last_step, job.last_step
+    assert "scan" in job.last_step, job.last_step
+
+
+def case_cancelled_clean_is_not_reported_as_failure():
+    """取消走 `_spawn` 之后必须是「取消」，不能变成「清洗失败」。"""
+    import gui.api as api_mod
+
+    root = _tmp_root("checkpoint2")
+    src = _checkpoint_book(root)
+    api = Api()
+    job, raised, _steps = _run_with_fake_clean(
+        api_mod, total=9000, cancel_at=100, path=src
+    )
+    assert isinstance(raised, api_mod.Cancelled), raised
+
+    # 真走一遍 _spawn：同一个桩，同一条取消路径
+    job2 = api._new_job("import")
+    session = Session(source=src, adjust=None)
+
+    def fake_clean_file(src, *, adjust=None, on_step=None):
+        job2.cancel_requested = True
+        for i in range(1, 9001):
+            on_step(i, 9000, "scan")
+
+    old = api_mod.clean_file
+    api_mod.clean_file = fake_clean_file
+    try:
+        api._spawn(job2, lambda: api._run_import(job2, session))
+        # 桩必须等线程跑完再还原：`_spawn` 是异步起线程，
+        # 在它返回时就还原，线程拿到的已经是真的 clean_file 了。
+        job2.thread.join(timeout=20)
+    finally:
+        api_mod.clean_file = old
+
+    assert job2.done is True
+    assert job2.cancelled is True, "取消没被记成取消"
+    assert job2.error == "", f"取消被当成失败报出来了：{job2.error}"
+    assert job2.error_title == "", f"取消被贴了个失败标题：{job2.error_title}"
+    assert job2.payload is None, job2.payload
+    # 产物目录不残留
+    assert not (src.parent / f"{src.stem}_gui").exists(), "取消后还留了产物目录"
+
+
+def case_job_last_step_stays_out_of_the_payload():
+    """`last_step` 只进日志与技术细节，不许混进送界面的 payload。"""
+    job = Job(job_id="t-laststep")
+    assert hasattr(job, "last_step"), "Job 没有 last_step"
+    assert job.last_step == "", "默认必须是空串（没跑过就没什么可说）"
+
+    api = Api()
+    api._jobs[job.job_id] = job
+    view = api.job_poll(job.job_id)
+    assert "last_step" not in view, f"job_poll 把 last_step 送到界面了：{view}"
+
+
+# ---------- 关于页外链通道（方案 C：白名单写死在 Python 侧） ----------
+#
+# `todo/0.3.0.md` 的「【设计】“关于”页重设计」里的「外链通道（方案 C）」：三个正式地址写死、逐字比对，
+# 其余一律拒绝并给「人话」。坑写在条目里：白名单不许由前端传任意 URL 直接放行，
+# 也不许只靠 `target="_blank"`（那是全放行）。
+
+ABOUT_GOOD_URLS = (
+    "https://www.xiaohongshu.com/user/profile/63c200200000000027028222",
+    "https://github.com/ChineseRyan/huoban",
+    "https://ifdian.net/a/ChineseRyan",
+)
+
+
+def _stub_open(fn):
+    """把「真去开浏览器」那一步换成假的。库代码只返回数据，测试也不该弹窗。"""
+    import gui.api as api_mod
+
+    old = api_mod._open_external
+    api_mod._open_external = fn
+    return api_mod, old
+
+
+def case_about_links_is_the_same_source_as_the_whitelist():
+    """页脚要显示的三条地址必须与放行白名单同源 —— 两处漂了就会出现「显示得出来、点不动」。
+
+    ui.html 不写死 http 串（`case_ui_has_no_external_links` 要求单文件零外链），
+    所以地址由这个接口供；`open_url` 又拿同一份做白名单。这条用例把两者焊在一起：
+    接口给的每一条都必须真能被 `open_url` 放行。
+    """
+    from gui.api import _ABOUT_LINKS, _ABOUT_URLS
+
+    out = Api().about_links()
+    links = out["links"]
+    assert set(links) == {"xiaohongshu", "github", "ifdian"}, links
+    assert "error" not in out, out
+
+    # 逐字等于白名单那三条（顺序无所谓，成员必须一模一样）
+    assert sorted(links.values()) == sorted(_ABOUT_URLS), (links, _ABOUT_URLS)
+    assert dict(_ABOUT_LINKS) == links, "键名或地址被改动了：%r" % (links,)
+
+    opened: list[str] = []
+    api_mod, old = _stub_open(opened.append)
+    try:
+        api = Api()
+        for url in links.values():
+            assert api.open_url(url).get("ok") is True, "%r 显示得出来却点不动" % (url,)
+    finally:
+        api_mod._open_external = old
+    assert opened == [links["xiaohongshu"], links["github"], links["ifdian"]], opened
+
+
+def case_open_url_allows_exactly_the_three_written_in_addresses():
+    """只放行写死的三条地址，其余一律拒绝 —— 这不是「过滤一下」，是白名单。
+
+    原来的 `gui/api.py` 只有 `os.startfile`：「用系统默认程序打开」这个能力谁都能传
+    任意地址进来。关于页的外链要走 js_api，所以放行范围必须在 Python 侧写死。
+    """
+    from gui.api import _ABOUT_URLS
+
+    assert tuple(_ABOUT_URLS) == ABOUT_GOOD_URLS, (
+        "白名单被改了或宽度变了：%r" % (tuple(_ABOUT_URLS),)
+    )
+
+    opened: list[str] = []
+    api_mod, old = _stub_open(opened.append)
+    try:
+        api = Api()
+        for url in ABOUT_GOOD_URLS:
+            out = api.open_url(url)
+            assert out.get("ok") is True, (url, out)
+            assert "error" not in out, (url, out)
+        assert opened == list(ABOUT_GOOD_URLS), "放行的地址该原样交给系统浏览器：%r" % (opened,)
+
+        opened.clear()
+        # 每一条都必须被拒：同域名换路径 / 带 query / 更短 / http / 换大小写 /
+        # 少一位 / 换协议。白名单是逐字比对，不是「同一个网站就放行」。
+        bad = (
+            "https://github.com/ChineseRyan/huoban-notes",
+            "https://github.com/ChineseRyan/huoban?tab=readme",
+            "https://github.com/ChineseRyan",
+            "http://github.com/ChineseRyan/huoban",
+            "https://GitHub.com/ChineseRyan/huoban",
+            "https://www.xiaohongshu.com/user/profile/63c20020000000002702822",
+            "https://www.xiaohongshu.com/",
+            "https://ifdian.net/a/",
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "",
+            "   ",
+        )
+        for url in bad:
+            out = api.open_url(url)
+            assert out.get("ok") is not True, "%r 不该放行：%r" % (url, out)
+            assert out.get("error"), "%r 被拒了却没给人话：%r" % (url, out)
+            assert "Traceback" not in out["error"], out
+        assert opened == [], "被拒的地址竟然真交给系统打开了：%r" % (opened,)
+    finally:
+        api_mod._open_external = old
+
+
+def case_open_url_turns_open_failure_into_words():
+    """系统浏览器打不开时只返回人话，不抛异常、不 print（库代码只返回数据）。"""
+    def boom(_url):
+        raise OSError("没有默认浏览器")
+
+    api_mod, old = _stub_open(boom)
+    try:
+        out = Api().open_url(ABOUT_GOOD_URLS[1])
+    finally:
+        api_mod._open_external = old
+    assert out.get("ok") is not True, out
+    assert "没有默认浏览器" in out.get("error", ""), out
+
+
 # ---------- 用例表 ----------
 
 _CASES = [
@@ -2627,18 +3045,21 @@ _CASES = [
     case_ui_polling_respects_the_job_badge,
     case_ui_has_no_external_links,
     case_ui_is_one_lf_file,
-    case_ui_drop_has_three_states,
-    case_ui_drop_classifies_by_mime_only,
-    case_ui_drop_state_is_always_cleared,
-    case_ui_drop_uses_no_generic_green_red,
+    # 0.2.3 第 1 条（2026-11-17 开发者定）：悬停只有迎宾态 ——
+    # 一团跟手的墨（五色随机、单次不换）+「请松手」，悬停期不判书/非书
+    case_ui_drop_has_welcome_state,
+    case_ui_drop_does_not_classify_during_drag,
+    case_ui_drop_state_holds_until_verdict,
+    case_ui_drag_colors_come_from_cover_palette,
+    case_ui_drag_color_is_stable_within_one_drag,
     case_ui_drop_first_frame_snaps_into_place,
-    case_ui_drop_office_docs_are_not_books,
-    case_ui_drop_never_guesses_without_mime,
+    case_ui_drag_office_docs_get_no_verdict,
+    case_ui_drag_without_files_type_is_silent,
     case_ui_click_area_is_the_frame_inside,
     case_ui_font_default_follows_the_imported_package,
     case_ui_drag_page_text_is_not_a_book,
-    # 用户反馈（2026-11-09）：exe/json 拖进虚框不许亮「书稿已得」
-    case_ui_drag_exe_and_json_are_not_books,
+    # 用户反馈（2026-11-09）：exe/json 拖进虚框不许亮「书稿已得」（现由迎宾态统一覆盖）
+    case_ui_drag_exe_and_json_get_no_verdict,
     case_ui_font_checkbox_keeps_the_users_choice,
     # 第 1 组：糊行默认拒收 + 仍然继续 / 目录残留出口 / 错误页接线
     case_one_line_book_is_rejected_with_a_continue_exit,
@@ -2647,6 +3068,19 @@ _CASES = [
     case_is_one_line_book_only_when_zero_chapters_and_suspected,
     case_toc_empty_prefix_has_a_readable_exit_in_alerts,
     case_error_page_wires_the_continue_button,
+    # 0.3.0 出错页逐屏重审（2026-11-17 开发者判过 1–5 条）：正文说人话、
+    # 技术细节与正文左对齐且矮窗只有一层滚动、三颗出口按后果分档
+    case_error_page_body_keeps_jargon_in_the_detail,
+    case_error_page_detail_box_lines_up_with_the_body,
+    case_error_page_exits_are_a_ladder,
+    # 0.3.0 出错页段间距收窄（2026-11-17 判过乙：按空行拆段、段距 12）
+    case_error_page_body_splits_paragraphs,
+    case_error_page_spacing_is_one_scale,
+    # 0.3.0 书名 / 作者 / 输出目录输入框的右键菜单（2026-11-17 开发者定范围与配色）
+    case_ui_context_menu_only_on_the_three_boxes,
+    case_ui_context_menu_is_the_apps_own_paper,
+    case_ui_context_menu_paste_degrades_without_api,
+    case_ui_context_menu_closes_on_escape_and_view_change,
     # 验收期补的：装饰边框切章 / 清洗等待页飘真内容 / 付梓字模不印古文
     case_import_excerpt_returns_this_books_own_lines,
     case_import_excerpt_is_read_only_and_bounded,
@@ -2661,6 +3095,17 @@ _CASES = [
     case_back_cover_falls_back_to_the_imported_one,
     case_ui_cover_caption_has_no_queue_position,
     case_ui_cover_redraw_keeps_the_current_look,
+    # 0.3.0 关于页：外链通道（方案 C）白名单在 Python 侧
+    case_paste_text_returns_the_clipboard_text,
+    case_paste_text_empty_clipboard_is_not_an_error,
+    case_paste_text_failure_returns_words_not_exception,
+    case_paste_text_reads_the_windows_clipboard_for_real,
+    case_cancel_during_clean_fires_at_the_next_checkpoint,
+    case_cancelled_clean_is_not_reported_as_failure,
+    case_job_last_step_stays_out_of_the_payload,
+    case_about_links_is_the_same_source_as_the_whitelist,
+    case_open_url_allows_exactly_the_three_written_in_addresses,
+    case_open_url_turns_open_failure_into_words,
 ]
 
 

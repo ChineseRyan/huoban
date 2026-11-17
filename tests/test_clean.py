@@ -3941,6 +3941,128 @@ def case_pure_decorative_frame_is_still_a_separator() -> None:
 # 十三、入口
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 清洗中途检查点（todo/0.3.0.md 的「清洗中途检查点：取消及时生效、卡点能看见」）
+#
+# 界面**仍然不显示进度**（决定 7 不变）。on_step 只服务两件事：让取消在下一次
+# 回调之内生效、让卡住时我们自己知道停在哪一段。所以这里的断言都围绕
+# 「回调说了什么」与「不传回调时结果一模一样」，不断言进度条。
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_sample() -> str:
+    """一份把两条检查点都走到的样本：有广告行、有目录、有碎行要并。"""
+    body = []
+    for i in range(1, 13):
+        body.append(f"第{i}段正文，写得很正常，以句号收尾。")
+        body.append("")
+        body.append("天才一秒记住本站 https://example.com/x")
+        body.append("")
+    return _text(
+        "目录",
+        "",
+        "第一章　起　……　1",
+        "第二章　止　……　9",
+        "",
+        "第一章　起",
+        "",
+        "半个句子没写完",
+        "接上去的后半截。",
+        "",
+        *body,
+        "第二章　止",
+        "",
+        "收尾一段。",
+    )
+
+
+def case_on_step_changes_nothing_when_omitted():
+    """不传 on_step 与传一个什么都不做的 on_step，结果必须逐字节一致。
+
+    条目原话是「不传回调时行为与现在完全一致」—— 那就要能证明：多挂一个
+    回调不许改任何一个决定。两边都序列化整棵章节树与整份报告来比。
+    """
+    import json
+
+    text = _checkpoint_sample()
+    plain = clean_text(text, source="哨兵.txt")
+    steps: list[tuple] = []
+    watched = clean_text(
+        text, source="哨兵.txt", on_step=lambda d, t, s: steps.append((d, t, s))
+    )
+
+    assert steps, "传了 on_step 却一次都没被回调"
+    assert watched.text == plain.text, "清洗后的正文变了"
+    assert to_dict(watched.book) == to_dict(plain.book), "章节树变了"
+    assert json.dumps(watched.report, ensure_ascii=False, sort_keys=True) == json.dumps(
+        plain.report, ensure_ascii=False, sort_keys=True
+    ), "清洗报告变了"
+
+
+def case_on_step_reports_both_stages():
+    """逐行扫描与段落重组两段都要报，且 done/total 数得对。"""
+    text = _checkpoint_sample()
+    total_lines = len(text.splitlines())
+    seen: list[tuple[str, int, int]] = []
+    clean_text(text, source="哨兵.txt", on_step=lambda d, t, s: seen.append((s, d, t)))
+
+    stages = [s for s, _, _ in seen]
+    assert "scan" in stages, f"逐行扫描阶段没回调：只看到 {set(stages)}"
+    assert "merge" in stages, f"段落重组阶段没回调：只看到 {set(stages)}"
+
+    scan = [(d, t) for s, d, t in seen if s == "scan"]
+    assert all(t == total_lines for _, t in scan), f"scan 的 total 不是总行数：{scan[:3]}"
+    assert scan[-1][0] == total_lines, f"scan 没跑到最后一行就停了：{scan[-1]}"
+
+    merge = [(d, t) for s, d, t in seen if s == "merge"]
+    assert merge[-1][0] == merge[-1][1], f"merge 的 done 没走到 total：{merge[-1]}"
+    # 每一趟内部的 done 必须严格 +1（否则「下一次回调内停下」无从谈起）。
+    # 允许换趟从 1 重新数：`clean_text` 在认结构时会先探测性地跑一趟 `_scan`，
+    # 那种重来是设计的一部分，不是跳号。
+    for stage in ("scan", "merge"):
+        done_seq = [d for s, d, _ in seen if s == stage]
+        assert done_seq, f"{stage} 一次都没回调"
+        prev = 0
+        for d in done_seq:
+            if d == prev + 1:
+                prev = d
+                continue
+            assert d == 1, f"{stage} 的 done 跳号或回退：{prev} → {d}"
+            prev = 1
+
+
+def case_on_step_exception_escapes_clean_text():
+    """回调里抛的异常必须一路冒出来。
+
+    取消就是靠这个：`gui/api.py` 的闭包在检查点抛 `Cancelled`，clean.py 要是
+    吞掉它，用户点了取消还得等整本书洗完（而且 `_spawn` 会把它当成正常跑完）。
+    """
+    class _Stop(Exception):
+        pass
+
+    def boom(done: int, total: int, stage: str) -> None:
+        if done >= 5:
+            raise _Stop()
+
+    text = _checkpoint_sample()
+    try:
+        clean_text(text, source="哨兵.txt", on_step=boom)
+    except _Stop:
+        return
+    raise AssertionError("回调抛的异常被 clean_text 吞掉了 —— 取消会失效")
+
+
+def case_clean_file_passes_on_step_through():
+    """`clean_file` 也得透传 on_step：GUI 走的是这条路，不是 clean_text。"""
+    text = _checkpoint_sample()
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "哨兵.txt"
+        src.write_text(text, encoding="utf-8")
+        seen: list[str] = []
+        clean_file(src, on_step=lambda d, t, s: seen.append(s))
+    assert "scan" in seen and "merge" in seen, f"clean_file 没把 on_step 透下去：{set(seen)}"
+
+
 _CASES = [
     case_plain_structure,
     case_start_line_is_original,
@@ -4146,6 +4268,11 @@ _CASES = [
     # 第 1 组验收：装饰边框章节标题
     case_framed_chapter_titles_are_cut_cleanly,
     case_pure_decorative_frame_is_still_a_separator,
+    # 0.3.0 清洗中途检查点：取消及时生效、卡点能看见
+    case_on_step_changes_nothing_when_omitted,
+    case_on_step_reports_both_stages,
+    case_on_step_exception_escapes_clean_text,
+    case_clean_file_passes_on_step_through,
 ]
 
 
@@ -4158,6 +4285,9 @@ def main() -> int:
         except AssertionError as e:
             failed += 1
             print(f"FAIL {c.__name__}: {e}")
+        except Exception as e:  # noqa: BLE001 - 与 test_gui 同一套跑法：一条炸了不许打断整轮
+            failed += 1
+            print(f"ERROR {c.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(_CASES) - failed}/{len(_CASES)} passed")
     return 1 if failed else 0
 

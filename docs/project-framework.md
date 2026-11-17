@@ -24,7 +24,9 @@
       └─ assets/       图标 / textures/（底纹）/ backgrounds/（整幅背景）
                        ├─ about_seal_light.png   关于页印面·浅色（印色 #A83A2E，264×264 RGBA）
                        ├─ about_seal_dark.png    关于页印面·深色（印色 #D65E4D，264×264 RGBA）
-                       └─ about_seal_mask.png    手 P 透明底母版（ui.html 内嵌 base64 的独立留存）
+                       ├─ about_seal_mask.png    手 P 透明底母版（ui.html 内嵌 base64 的独立留存）
+                       ├─ about_qr_light.png     悬停二维码·浅色（透明底印色模块，360px，tools/make_qr_card.py 生成）
+                       └─ about_qr_dark.png      悬停二维码·深色（#C9C3B6 纸签 + 墨码，360px，同上）
 CLI 只有四个子命令：`diagnose` / `clean` / `epub` / `reflow`（EPUB 导入）。
 GUI 是第五条入口，设计权威是 `docs/gui-design.md`（视图数、js_api 方法表以代码为准）。
 
@@ -33,7 +35,7 @@ GUI 是第五条入口，设计权威是 `docs/gui-design.md`（视图数、js_a
 - Python 包是仓库根下的 `huoban/`，运行方式 `python -m huoban diagnose 书.txt`。
 
 ### 测试怎么跑
-**逐个脚本直跑**，看末行 `N/M passed`；端到端冒烟：`python tools/smoke_test.py`。
+**逐个脚本直跑**，看末行 `N/M passed`；端到端冒烟：`python -B tools/smoke_test.py`。
 基线条数以实跑为准，不要抄进文档。
 
 ## 环境

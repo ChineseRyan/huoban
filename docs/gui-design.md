@@ -129,8 +129,12 @@
 旁挂两屏 —— 不在流程上，从任何一步都能进：
 
 ┌─ 关于　about ─────────────────────────────────────────────────────┐
-│ 整屏只有两样：一枚 112px 的印 + 一行 12px 版本号                   │
-│ Esc 或点空白处回 ①；这一屏连窗口边角都不画                         │
+│ 中央：一枚 clamp(72–112px) 的印 + 一行 12px 版本号                 │
+│ 页脚：左「小红书主页 | GitHub 项目页」，右「请喝杯茶」             │
+│ 悬停「请喝杯茶」→ 按钮正上方浮出爱发电二维码                       │
+│   （浅色：朱印直接印在纸面上；深色：一块暖灰纸签）                 │
+│ 点按钮或两条链接 → 系统浏览器；Esc 或点空白处回 ①                  │
+│ 这一屏连窗口边角都不画；点印面不关页（留给彩蛋连点计数）           │
 └────────────────────────────────────────────────────────────────────┘
 
 ┌─ 错误　error ─────────────────────────────────────────────────────┐
@@ -141,7 +145,51 @@
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+> **2026-11-14 订正**：上面末两屏写的「旁挂两屏 —— 不在流程上，从任何一步都能进」与实现不符：
+> 现役 `gui/ui.html` 的关于屏**只有 ① 首页一个入口**（`closeAbout()` 的注释写明「入口只有 ① 首页一处」），
+> Esc 或点空白处都回 ①（`closeAbout()` 里定死 `setView("drop")`）。0.3.0 关于页重做时
+> 按 `todo/` 下对应版本文件的条目重新定这一口径。
+>
+> **2026-11-14 关于页 v2 已落地**（以 `designs/about-final-v2.html` 为准，见 `todo/0.3.0.md`）：
+> 页脚两条外链与「请喝杯茶」按钮、悬停二维码、彩蛋骨架都进了 `gui/ui.html`。实现上有四处要记住：
+>
+> 1. **三条地址不在 ui.html 里**：由 js_api 的 `about_links()` 提供（白名单单源在 `gui/api.py`），
+>    前端只把拿到的地址转手交给 `open_url()`；拿不到时页脚保持隐藏，不给死链。
+>    `tests/test_gui.py` 的 `case_ui_has_no_external_links` 仍钉着「ui.html 里不许出现 http(s) 地址」。
+> 2. **`--ink-3` 压深只在关于屏生效**：`#view-about { --ink-3: … }`，不动全局变量；
+>    全局那一档管着别的屏的次要文字。
+> 3. **深色 `--seal` 已改 `#D65E4D`**（连同 `--seal-*` 的 rgba），
+>    与 `about_seal_dark.png` 对齐；这是全站深色强调色，不只关于屏。
+> 4. **点印面不再关页**：印面接了 1.5 秒内连点 7 次的彩蛋计数（本版只留骨架、无可见效果），
+>    所以它的点击被吃掉；关页仍是 Esc 与点其他空白处。点页面上的链接、按钮、二维码也都不关页
+>    （链接与按钮走系统浏览器，二维码本身不响应点击）。
+
 要点：
+
+- **① 拖拽迎宾态（2026-11-17 落地，定稿 `designs/拖拽五色-方向稿.html`）**：拖文件进首屏，
+  一团墨跟着光标洇开、题字换成「请松手」；颜色从五支（朱 / 青 / 黛 / 赭 / 墨，四支取自
+  封面色板 `gui/cover.py`）里抽一支，**一次拖拽内不换色**，下次拖重新抽。
+  悬停期**不判书 / 非书**：实测 `dragenter` / `dragover` 里 `getAsFile()` 与
+  `webkitGetAsEntry()` 一律 null，`.lnk` 连 MIME 都没有 —— 判了就是猜。旧的三档
+  （「书稿已得」/「非书也」/ 不表态）随之退场，判词交给松手后的 Python 按后缀给。
+  新态算「已表态」：保持到 `__onDropPath` 到达或 750ms 兜底，不闪回「把书拖到这里」；
+  拖的不是文件（`types` 里没有 `"Files"`，如网页里选中的文字）仍不表态。
+  为什么这么定见 `docs/notes/drag-welcome-five-colors.md`。
+
+- **④ 三个输入框的右键菜单（2026-11-17 落地）**：书名 / 作者 / 输出目录右键出「粘贴 / 全选」两项，
+  语言框不做。菜单是自绘的一块纸（纸底、墨字、悬停压一层印色），跟着深浅主题走 ——
+  不是系统弹层。触发用 `mousedown`（右键），`contextmenu` 只做兜底；
+  `_debug()` 一个字不动，全局右键仍然关着。后端没有 `paste_text` 时「粘贴」置灰不隐藏。
+  为什么这么定（含各引擎对 `contextmenu` 派发的分歧）见 `docs/notes/context-menu-on-inputs.md`。
+
+- **出错页的本事在「怎么办」上（2026-11-17 落地）**：正文说人话 —— 实现术语（pywebview、
+  job_poll、轮询、hooks）与英文堆栈一律进「技术细节」，正文只留能照做的动作；
+  技术细节的灰框与正文同一条左边缘，矮窗下只留外层一层滚动；
+  三颗出口按后果分档（「仍然继续」是描边按钮，「打开所在目录」留在虚线小字那一档，两者拉开 7px）。
+  段间距收成一档：正文按空行拆段、段距 12px，标题下 6px，正文到「技术细节」16px（矮窗 12px）——
+  原来段间靠空行撑开是 25–26px，四段就吃掉 77px。
+  逐条判词与实测数字见 `designs/错误页逐屏清单.md`。
+
 
 - **②的警告不可折叠**：软件要先给账单再动手，一键式不能等于把账单藏起来。
 - ③ 的行展示沿用 `cleanreport.py` 口径（`SAMPLE_LIMIT=8`、截断 `_TEXT_LIMIT=60`），并复用 `redact.shape()`
@@ -162,10 +210,10 @@
   `about_seal_dark.png`（深色，印色 `#D65E4D`；2026-11-12 开发者定，见 `docs/notes/about-seal-dark-color.md`）、
   `about_seal_mask.png`（母版，手 P 透明底图本体，与 `gui/ui.html` 内嵌 base64 逐字节一致）。
   浅/深两版都由母版着色导出，形状与做旧边缘完全一致，不重画。浅色 `#A83A2E` 与现役浅色 `--seal` 相同；
-  深色按开发者 2026-11-12 决策改为 `#D65E4D`（v2 候选稿的新版朱砂），不再取现役 `--seal` 的 `#E07A6C`。
-  现行（本次更新前）深色印色是 `#E07A6C`，已随本次资产更新作废。
-  **现役 `gui/ui.html` 仍走内嵌 base64 + `var(--seal)` 运行时染色**，这三份是独立资产留存与
-  设计稿取图用，运行时引用未改；后续若改成文件引用，深浅切换要同步换文件。
+  深色按开发者 2026-11-12 决策改为 `#D65E4D`（v2 候选稿的新版朱砂），旧值 `#E07A6C` 作废。
+  **2026-11-14 起 `gui/ui.html` 的深色 `--seal` 已同步改为 `#D65E4D`**（含 `--seal-*` 的 rgba），
+  资产与运行时对齐；运行时仍是「内嵌 base64 蒙版 + `var(--seal)` 染色」，
+  不是引用这三份 PNG。这三份是独立资产留存与设计稿取图用；后续若改成文件引用，深浅切换要同步换文件。
 
 ---
 
@@ -175,26 +223,32 @@
 统一规则：API 方法只做「登记 → 起 worker → 立即返回 job_id」，前端只轮询一个方法。
 
 > **2026-11-06 订正**：下表原列 8 个方法，且把 `preview_cover` 写成 `preview_cover(spec)`（错的）。
-> **实际 `gui/api.py` 有 16 个 js_api 方法**（行号对 2026-11-06 的 `gui/api.py`），逐个如下。
+> 当日实际 16 个；**2026-11-14 复核为 18 个**（新增 `import_excerpt` 与 `force_import`，界面均已调用）；
+> **2026-11-17 复核为 20 个**（再增 `about_links` 与 `open_url`，随关于页 v2 落地）。
+> 行号已随实装整体漂移，按文档约定（不写会失效的值）不再写行号，方法一律按签名在 `gui/api.py` 里查。
 > 加方法时请顺手加一行到这张表，别让它再漂。
 
 | 方法（签名照抄 `gui/api.py`） | 返回 | 内部 |
 |---|---|---|
-| `import_file(path: str)` :1743 | `{job_id}` | worker 两条入口：`.txt` → encoding 解码 → `clean_text(text, source=..., encoding=..., confidence=..., size_bytes=..., adjust=None)`；`.epub` → `read_epub_with_report(path, image_dir=<产物>/images)`（**不跑 clean.py**，章节边界由 OPF spine + nav/NCX 白送）→ 落产物 + 存 session |
-| `build_epub(job_id: str, meta: dict \| None = None)` :1755 | `{job_id2}` | worker：`write_epub(book, path, title=, author=, cover_path=, language=, modified=<输入 mtime>, fonts=)`；`meta.azw3` 为真时再调 `huoban.azw3.convert`（失败只记进 payload，不丢 EPUB） |
-| `cancel(job_id: str)` :1768 | `{ok}` | 只立取消旗子立刻返回（线程掐不断），界面不等转圈 |
-| `discard(job_id: str)` :1781 | `{ok}` | 结果页的「取消」：丢掉会话，只把本程序产出的 `_gui` 目录收进回收站，绝不碰输入文件 |
-| `job_poll(job_id: str)` :1796 | `{done, error, payload}` | 只读、无副作用；payload 就是 report dict |
-| `review(job_id: str)` :1826 | 五类各前 `REVIEW_PAGE` 行 | 同步返回，不起 worker；清单算一次挂会话上缓存 |
-| `review_more(job_id, key: str, offset: int = 0, count: int = REVIEW_PAGE)` :1838 | `{rows, total, more}` | 复核页滚到底再要一批（决定 27）；`offset` 是「已有几行」不是页码 |
-| `review_detail(job_id, key: str, index: int)` :1859 | 那一处的前后文 | 按需取，不随列表送（两千条带前后文会是几十 MB JSON） |
-| `apply_adjust(job_id: str, adjust: dict \| None = None)` :1874 | `{job_id2}` | worker：带 adjust 重跑，产物覆盖写；收的是**完整**新 adjust，不是增量（撤销一条 = 去掉再调一次） |
-| `pick_cover(job_id: str)` :1914 | `{data_url, name}` / `{cancelled}` | 选自己的图当封面；导入口即归一化（EXIF 方向 + 保比例缩到 1650×2200 内 + 重编码），打包层仍不引 Pillow |
-| `preview_cover(job_id: str, opts: dict \| None = None)` :1952 | `{data_url}` | 同步可算：一张约 100KB PNG，实测约 119ms。**★ opts 必须是位置参数第二项，不能 keyword-only** —— pywebview 的 `js_bridge_call` 把 JS 传的对象塞进 `func_params` 第二位 |
-| `pick_file()` :2067 / `pick_dir(current: str = "")` :2085 | `{paths}` | `window.create_file_dialog(dialog_type=webview.FileDialog.OPEN, ...)` / `FileDialog.FOLDER`；`FileDialog` 是 IntEnum，`OPEN=10 / FOLDER=20 / SAVE=30`（`webview/__init__.py:112`，旧的 `OPEN_FILE`/`SAVE_DIALOG` 已废弃） |
-| `reveal_in_explorer(path: str)` :2116 | `{ok}` | 给文件就打开它所在目录，给目录就直接开 |
-| `open_file(path: str)` :2128 | `{ok}` | 用系统默认程序打开文件（② 页「查看清洗报告」用） |
-| `app_info()` :2139 | `{version, max_input_mb, azw3}` | 启动时调一次。`azw3` 是「这台机器能不能导 AZW3」（几次 `exists()` 探测，不启子进程），界面据此决定 ④ 页那个复选框能勾还是置灰 |
+| `import_excerpt(path: str)` | `{drop: [...], merge: [...]}` | 同步只读解码 TXT 开头一小段（前 256 KB），挑这本书自己的真广告行与真断行对，给忙碌屏飘字用；不跑清洗、不写盘、EPUB 返回空清单 |
+| `import_file(path: str)` | `{job_id}` | worker 两条入口：`.txt` → encoding 解码 → `clean_text(text, source=..., encoding=..., confidence=..., size_bytes=..., adjust=None)`；`.epub` → `read_epub_with_report(path, image_dir=<产物>/images)`（**不跑 clean.py**，章节边界由 OPF spine + nav/NCX 白送）→ 落产物 + 存 session |
+| `build_epub(job_id: str, meta: dict \| None = None)` | `{job_id2}` | worker：`write_epub(book, path, title=, author=, cover_path=, language=, modified=<输入 mtime>, fonts=)`；`meta.azw3` 为真时再调 `huoban.azw3.convert`（失败只记进 payload，不丢 EPUB） |
+| `cancel(job_id: str)` | `{ok}` | 只立取消旗子立刻返回（线程掐不断），界面不等转圈 |
+| `discard(job_id: str)` | `{ok}` | 结果页的「取消」：丢掉会话，只把本程序产出的 `_gui` 目录收进回收站，绝不碰输入文件 |
+| `job_poll(job_id: str)` | `{done, error, payload}` | 只读、无副作用；payload 就是 report dict |
+| `review(job_id: str)` | 五类各前 `REVIEW_PAGE` 行 | 同步返回，不起 worker；清单算一次挂会话上缓存 |
+| `review_more(job_id, key: str, offset: int = 0, count: int = REVIEW_PAGE)` | `{rows, total, more}` | 复核页滚到底再要一批（决定 27）；`offset` 是「已有几行」不是页码 |
+| `review_detail(job_id, key: str, index: int)` | 那一处的前后文 | 按需取，不随列表送（两千条带前后文会是几十 MB JSON） |
+| `apply_adjust(job_id: str, adjust: dict \| None = None)` | `{job_id2}` | worker：带 adjust 重跑，产物覆盖写；收的是**完整**新 adjust，不是增量（撤销一条 = 去掉再调一次） |
+| `force_import(job_id: str)` | `{job_id}` | 糊行书错误页的「仍然继续」：把 `force_one_line` 旗子挂回同一会话再跑一次导入；同一会话后续重跑不再被拦第二次 |
+| `pick_cover(job_id: str)` | `{data_url, name}` / `{cancelled}` | 选自己的图当封面；导入口即归一化（EXIF 方向 + 保比例缩到 1650×2200 内 + 重编码），打包层仍不引 Pillow |
+| `preview_cover(job_id: str, opts: dict \| None = None)` | `{data_url}` | 同步可算：一张约 100KB PNG，实测约 119ms。**★ opts 必须是位置参数第二项，不能 keyword-only** —— pywebview 的 `js_bridge_call` 把 JS 传的对象塞进 `func_params` 第二位 |
+| `pick_file()` / `pick_dir(current: str = "")` | `{paths}` | `window.create_file_dialog(dialog_type=webview.FileDialog.OPEN, ...)` / `FileDialog.FOLDER`；`FileDialog` 是 IntEnum，`OPEN=10 / FOLDER=20 / SAVE=30`（`webview/__init__.py:112`，旧的 `OPEN_FILE`/`SAVE_DIALOG` 已废弃） |
+| `reveal_in_explorer(path: str)` | `{ok}` | 给文件就打开它所在目录，给目录就直接开 |
+| `open_file(path: str)` | `{ok}` | 用系统默认程序打开文件（② 页「查看清洗报告」用） |
+| `about_links()` | `{links: {xiaohongshu, github, ifdian}}` | 关于页页脚三条外链地址的单源，与 `open_url` 的白名单同一份；ui.html 零外链，渲染时来取；无失败路径 |
+| `open_url(url: str)` | `{ok}` / `{error}` | 关于页外链通道：去掉首尾空白后只放行三条地址、逐字比对，其余一律拒绝并返回人话；经系统浏览器打开 |
+| `app_info()` | `{version, max_input_mb, azw3}` | 启动时调一次。`azw3` 是「这台机器能不能导 AZW3」（几次 `exists()` 探测，不启子进程），界面据此决定 ④ 页那个复选框能勾还是置灰 |
 
 前端只消费已有 JSON：`clean.py` 的 report 键、`model.to_dict()` 的顶层键（version / title / author /
 encoding / source / front_matter / chapters / tail_matter）**都不新增**。例外只有「adjust 接口」实装时新增的
@@ -790,10 +844,10 @@ JPEG 一律排除（解码依赖 libjpeg 版本会让成品哈希漂，违反「
    且与"只有图没有字"（图集/漫画）分成两句话，后者不该被说成拖错了文件。
    真窗口取证 `backups/gui-20261028/probe_empty_states.py` 8/8 + 截图。
    **未覆盖**：文件被占用、输出目录只读（这两个要真造 OS 条件，本轮没造）。
-6. adjust 为 None 的路径零回归：`tests/` 全部脚本逐个跑全绿（`pytest tests/` 收集不到这些用例，跑不起来）。
-   **实测**：470 + smoke 9 = **479** 全绿。
-   **2026-11-06 订正**：470/479 是 2026-10-28 当轮的快照数；全量重跑现在是 17 个脚本 **535** 条
-   + smoke **9** = **544**（逐个脚本跑）。本条结论「零回归」不变，变的是计数。
+6. adjust 为 None 的路径零回归：`tests/test_*.py` 全部脚本逐个直跑全绿，外加端到端冒烟全绿
+   （`pytest tests/` 收集不到这些用例，跑不起来）。**基线与计数以实跑为准、不抄进文档**
+   （文档约定：不写会失效的值）：逐个直跑看末行 `N/M passed`，再跑 `python -B tools/smoke_test.py`
+   看末行 `9/9 passed`。本条结论「零回归」不变。
 7. **EPUB 导入**：5 本真实 EPUB 跑通（含 1 带真插图、1 本 EPUB2、1 本 Calibre 转出、1 本破损）；章数与原书 nav 条目一致；打包出的图片数与 OPF manifest 图片条目一致；装饰图（全书高频引用）0 张进入正文；`--no-fonts` 打包逐字节可复现。
    **已接进界面**（拖 `.epub` 直接走 ② 页）。实测 `死灵之书v1.2.epub`（20 MB，2026-10-28 复测）：
    80 章 / 2 卷 / 4,505 段 / 1,029,636 字；图片带回 47 张、装饰图丢 2、孤立图丢 3；

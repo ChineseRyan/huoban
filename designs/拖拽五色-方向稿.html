@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>活板 · 拖拽五色 · 定稿 v2（浅色 / 深色）</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#E6E3DA;color:#1B1D1E;
+  font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  padding:36px 24px 56px;
+}
+.wrap{max-width:1020px;margin:0 auto}
+header{margin-bottom:10px}
+h1{font-size:20px;font-weight:600;margin:0 0 6px;letter-spacing:.04em}
+.sub{font-size:12px;color:#6B6F72;line-height:1.8}
+h2{font-size:13px;font-weight:600;margin:34px 0 6px;letter-spacing:.06em}
+p.one{font-size:12px;color:#6B6F72;margin:0 0 14px;line-height:1.75}
+.row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.stage{
+  position:relative;width:460px;height:320px;overflow:hidden;
+  background:var(--paper);color:var(--ink);
+  border:1px solid rgba(0,0,0,.08);
+}
+.stage.light{ --paper:#F1EFE8; --ink:#1B1D1E; --ink-3:#928C7E; --rule:rgba(27,29,30,.16); }
+.stage.dark { --paper:#15181D; --ink:#E8E4DA; --ink-3:#77726A; --rule:rgba(232,228,218,.20); }
+
+/* 四角裁切线：与真界面同样的东西，只当场景参照 */
+.marks i{position:absolute;width:26px;height:26px;border:0 solid var(--ink-3)}
+.marks i:nth-child(1){left:26px;top:26px;border-left-width:1px;border-top-width:1px}
+.marks i:nth-child(2){right:26px;top:26px;border-right-width:1px;border-top-width:1px}
+.marks i:nth-child(3){left:26px;bottom:26px;border-left-width:1px;border-bottom-width:1px}
+.marks i:nth-child(4){right:26px;bottom:26px;border-right-width:1px;border-bottom-width:1px}
+
+/* 墨团：与 ui.html 的 .bloom 同构的径向渐变，颜色由 --tone 决定 */
+.blob{
+  position:absolute;left:50%;top:54%;width:380px;height:380px;
+  margin:-190px 0 0 -190px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle closest-side,
+    rgba(var(--tone), .16) 0%,
+    rgba(var(--tone), .11) 34%,
+    rgba(var(--tone), .045) 62%,
+    rgba(var(--tone), 0) 100%);
+}
+.title{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:"Noto Serif SC","Source Han Serif SC","Songti SC","SimSun",serif;
+  font-size:26px;letter-spacing:.08em;color:var(--tone-solid);
+}
+.tag{position:absolute;left:12px;top:10px;font-size:11px;letter-spacing:.1em;color:var(--ink-3)}
+.cname{font-size:12px;color:#5A5E61;margin:8px 0 0;letter-spacing:.06em}
+
+.note{margin-top:36px;padding-top:16px;border-top:1px solid rgba(0,0,0,.12);
+  font-size:12px;line-height:1.95;color:#5A5E61}
+.note h3{font-size:12.5px;margin:18px 0 6px;color:#3F4346;letter-spacing:.04em}
+.note ul{margin:0;padding-left:18px}
+.note li{margin:4px 0}
+code{font-size:11.5px}
+table{border-collapse:collapse;margin:8px 0;font-size:12px}
+th,td{border:1px solid rgba(0,0,0,.12);padding:4px 10px;text-align:left}
+th{background:rgba(0,0,0,.03);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>活板 · 拖拽五色 · 定稿 v2</h1>
+  <div class="sub">拖文件进首屏：一团跟着鼠标的墨，颜色每次拖拽随机抽一支（朱 / 青 / 黛 / 赭 / 墨），标题写「请松手」。浅色与深色并列。2026-11-17 开发者逐条判过，文案定为「请松手」，松手不补判。</div>
+</header>
+
+<h2>五色 · 浅色 / 深色</h2>
+<p class="one">颜色不是装饰：四支取自封面配色里的印色，墨色是兜底。拖进来的东西被染成「它可能成为的那张纸」的颜色。</p>
+<div id="colors"></div>
+
+<h2>文案</h2>
+<p class="one">文案定为「请松手」（2026-11-17 开发者定，原提的「松手即可」「请松手」备选作废）。</p>
+<div class="row" id="texts"></div>
+
+<div class="note">
+  <h3>一、颜色从哪儿来（核实结果）</h3>
+  <ul>
+    <li><strong>界面变量里当时没有独立的青色</strong>。彼时的两档拖拽色只有印色与墨色两支
+        （<code>--bloom-book</code> 浅 <code>168,58,46</code> / 深 <code>214,94,77</code>，
+        <code>--bloom-other</code> 是墨色），都不是青；落地时这两支已由本稿的五色取代。</li>
+    <li><strong>但产品里已有「青」</strong>：封面的六套配色（<code>gui/cover.py</code>）的印色分别是
+        宣纸 <code>#A83A2E</code>、松墨 <code>#C24A38</code>、青瓷 <code>#2C6C5F</code>、靛蓝 <code>#C8A02E</code>、
+        赭石 <code>#8E4B26</code>、黛青 <code>#35577D</code>。开发者记到的「青色」应该就是这两支青。</li>
+    <li><strong>本稿取五支</strong>：朱（沿用现役印色）、青（青瓷）、黛（黛青）、赭（赭石）、墨（兜底）。
+        理由：这些颜色不是新造的，用户之后挑封面时会见到同一套；拖拽时随机抽一支，
+        像先摸到一张纸的印色，而不是换一套「随机装饰色」。</li>
+    <li>深色一版各提亮一档，保证在 <code>#15181D</code> 上看得见；五色都比「纸」的亮度低（浅底）/ 高（深底），
+        不会把标题压得看不清。</li>
+  </ul>
+
+  <h3>二、随机怎么随</h3>
+  <ul>
+    <li><strong>已定：同一拖拽内稳定</strong>——进入拖拽时抽一次，整段拖拽不换色；松开后颜色不跳，
+        随墨团一起淡出；下次拖拽重新抽。理由：拖拽中跳色像故障，也破坏「墨在洇」的连续感。</li>
+    <li>未采纳：每 1.2 秒轮换（会闪）、按光标位置渐变（像荧光笔，与纸墨语言冲突）。</li>
+  </ul>
+
+  <h3>三、文案</h3>
+  <ul>
+    <li>定为<strong>「请松手」</strong>（2026-11-17 开发者定）。方向稿 v1 里那句长文案与两个备选一并作废。</li>
+  </ul>
+
+  <h3>四、交接：悬停态到松手</h3>
+  <ul>
+    <li>悬停期不再输出「书稿已得 / 非书也」，统一是「请松手」+ 五色墨团；
+        原来的 MIME 三档在悬停期退场（它本来就判不出 <code>.lnk</code>）。</li>
+    <li>松手时沿用 <code>0.2.3</code> 第 2 条的机制：这个新态算「已表态」，
+        保持到 <code>__onDropPath</code> 到达、或 750ms 兜底到点；不会跳回「把书拖到这里」。</li>
+    <li>松手后仍走现有流程：Python 报错进错误页，或正常进导入/忙碌页。</li>
+    <li>和条目二不打架：条目二的定时器按状态名判断，新态加进「保持」集合即可，逻辑不变。</li>
+  </ul>
+
+  <h3>五、已判：松手不补判</h3>
+  <ul>
+    <li>2026-11-17 定为<strong>不做</strong>：松手后不按后缀补一句「非书也 / 书稿已得」。</li>
+    <li>「请松手」随墨团淡出，直接进现有流程：Python 该报错的报错、该导入的导入。</li>
+  </ul>
+
+  <h3>六、实现要点</h3>
+  <ul>
+    <li>悬停期能用的信号只有：<code>types:["Files"]</code> 与 <code>item.type</code>
+        （<code>.txt</code>→<code>text/plain</code>，<code>.lnk</code>→空）；文件名只有 <code>drop</code> 时可读（已实测）。</li>
+    <li>CSS：<code>#drop-area</code> 上换成一个内联写死的 <code>--tone</code>（rgb 三元组）与 <code>--tone-solid</code>；
+        删掉 <code>[data-drop="book|other"]</code> 两套换色与 <code>.t-book / .t-other</code> 文案切换，新增一个 <code>.t-drag</code>。</li>
+    <li>JS：<code>dragenter</code> 抽色（数组五选一），<code>dragover</code> 只更新坐标（不重抽）；
+        <code>drop</code> 沿用条目二的保持/兜底。</li>
+    <li>会牵动的用例（全部先红后绿，不直接删断言）：
+      <code>case_ui_drop_has_three_states</code>（三态→悬停一态）、
+      <code>case_ui_drop_classifies_by_mime_only</code>（悬停不再分类，意图作废，改成「悬停期不判书/非书」的用例）、
+      <code>case_ui_drop_never_guesses_without_mime</code>（意图保留、机械断言随实现换）、
+      <code>case_ui_drop_uses_no_generic_green_red</code>（改成「五色必须来自封面色板」）、
+      <code>case_ui_drop_office_docs_are_not_books</code> 与 <code>case_ui_drag_exe_and_json_are_not_books</code>（同上）。</li>
+  </ul>
+
+  <h3>七、五色色值表</h3>
+  <table>
+    <tr><th>名</th><th>浅色（纸 <code>#F1EFE8</code>）</th><th>深色（底 <code>#15181D</code>）</th><th>来源</th><th>角色</th></tr>
+    <tr><td>朱</td><td><code>#A83A2E</code></td><td><code>#D65E4D</code></td><td>宣纸 / 现役印色</td><td>主印色，兜底默认</td></tr>
+    <tr><td>青</td><td><code>#2C6C5F</code></td><td><code>#6FA79A</code></td><td>青瓷</td><td>「青」这一支</td></tr>
+    <tr><td>黛</td><td><code>#35577D</code></td><td><code>#8FB0D6</code></td><td>黛青</td><td>深蓝</td></tr>
+    <tr><td>赭</td><td><code>#8E4B26</code></td><td><code>#C98A5B</code></td><td>赭石</td><td>土红</td></tr>
+    <tr><td>墨</td><td><code>#1B1D1E</code></td><td><code>#E8E4DA</code></td><td>松墨 / 正文墨</td><td>兜底色（认不出、只拖文字）</td></tr>
+  </table>
+  <p class="one">表中深色档的青、黛、赭是本次按比例提亮的值（封面深底印色只给了朱那一路的样例），
+     落地时以实际观感为准，可再调。</p>
+</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var COLORS = [
+    { name: "朱", light: "#A83A2E", dark: "#D65E4D", rgbL: "168,58,46",  rgbD: "214,94,77",  role: "主印色，兜底默认" },
+    { name: "青", light: "#2C6C5F", dark: "#6FA79A", rgbL: "44,108,95",  rgbD: "111,167,154", role: "青瓷那一支" },
+    { name: "黛", light: "#35577D", dark: "#8FB0D6", rgbL: "53,87,125",  rgbD: "143,176,214", role: "黛青，深蓝" },
+    { name: "赭", light: "#8E4B26", dark: "#C98A5B", rgbL: "142,75,38",  rgbD: "201,138,91",  role: "赭石，土红" },
+    { name: "墨", light: "#1B1D1E", dark: "#E8E4DA", rgbL: "27,29,30",   rgbD: "232,228,218", role: "兜底色" }
+  ];
+  var host = document.getElementById("colors");
+  COLORS.forEach(function (c) {
+    var row = document.createElement("div");
+    row.className = "row";
+    row.style.marginTop = "18px";
+    row.innerHTML =
+      stageHTML("浅色 · " + c.name, "light", c.light, c.rgbL) +
+      stageHTML("深色 · " + c.name, "dark", c.dark, c.rgbD) +
+      '<p class="cname" style="width:100%">' + c.name + "：" + c.role + "</p>";
+    host.appendChild(row);
+  });
+
+  var texts = ["请松手"];
+  var th = document.getElementById("texts");
+  texts.forEach(function (t) {
+    var d = document.createElement("div");
+    d.innerHTML = stageHTML("文案", "light", "#A83A2E", "168,58,46", t) +
+      '<p class="cname">' + t + "</p>";
+    th.appendChild(d);
+  });
+
+  function stageHTML(tag, theme, solid, rgb, text) {
+    return '<div class="stage ' + theme + '" style="--tone:' + rgb + ';--tone-solid:' + solid + '">' +
+      '<span class="tag">' + tag + "</span>" +
+      '<div class="blob"></div>' +
+      '<div class="title">' + (text || "请松手") + "</div>" +
+      '<div class="marks"><i></i><i></i><i></i><i></i></div>' +
+      "</div>";
+  }
+})();
+</script>
+</body>
+</html>
