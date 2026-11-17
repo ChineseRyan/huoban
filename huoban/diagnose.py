@@ -34,6 +34,15 @@ CHAPTER_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # 与真分节的唯一区别是"节与节之间隔得开不开"。
     ("数字顿号分节", re.compile(r"^\s*(?:[0-9０-９]{1,4}|[一二三四五六七八九十百]{1,4})\s*[、.．]\s*\S")),
     ("Chapter N", re.compile(r"^\s*[Cc][Hh][Aa][Pp][Tt][Ee][Rr]\s*[0-9]{1,4}")),
+    # 「星号 Chapter」：`　　☆、CH.1`（用户样本《超级玩家》全书 216 章都是这个形态）。
+    # 行首先一颗星（☆ U+2606 / ★ U+2605，样本里实测是前者：216 处，U+2B50 的
+    # emoji ⭐ 一处都没有 —— 开发者看到的 emoji 是显示层替换），再接顿号或点号，
+    # 然后是 CH.<数字>。**必须行首锚定**：正文里「他想起 CH.5 那一章」这种追述
+    # 不许被切成章，光有 `CH.` 不算。
+    # `CH` 与点号之间允许有一层数字：样本里 214 行是 `CH.N`、2 行写成 `CH1.19` /
+    # `CH1.198`（同一本书里的异体写法），两行都是真章行，不兼容就会少两章。
+    # 放到标题里之前统一成 `CH.N`，见 model 的 _STAR_CHAPTER_TITLE。
+    ("星号 Chapter", re.compile(r"^[\s\u3000]*[☆★]\s*[、.．]\s*[Cc][Hh][0-9]{0,2}\s*[.．]\s*[0-9]{1,4}\s*$")),
     ("卷首特殊章", re.compile(r"^\s*(?:序章|序言|楔子|引子|前言|引言|后记|尾声|终章|大结局|番外|外传|附录|目录)")),
     # 单独一个「序」也是一章（《书G》正文第 33 行就是裸「序」）。
     # 必须整行匹配：卷首特殊章上面那条是前缀匹配，直接往里加「序」会把
@@ -173,14 +182,25 @@ def match_chapter(line: str) -> str | None:
 
 _NUM_TITLE = re.compile(r"^\s*第\s*([0-9０-９〇零一二三四五六七八九十百千万两壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]{1,10})\s*[章回节]")
 
+# 「星号 Chapter」（`　　☆、CH.1`）的序号，给 _numbering 用。
+# 与 CHAPTER_PATTERNS 里那条是同一个形态的两半：那边判"是不是章行"，
+# 这里取"第几号"，序号是阿拉伯数字，直接 int() 即可。
+_STAR_NUM_TITLE = re.compile(r"^[\s\u3000]*[☆★]\s*[、.．]\s*[Cc][Hh][0-9]{0,2}\s*[.．]\s*([0-9]{1,4})\s*$")
+
 
 def _numbering(lines: list[str]) -> dict:
     """章节序号是否连续递增 —— 判断"章节结构是否可信"的最强信号。"""
     nums: list[int] = []
     bad: list[int] = []
     for i, line in enumerate(lines):
-        m = _NUM_TITLE.match(strip_frame(line))
+        core = strip_frame(line)
+        m = _NUM_TITLE.match(core)
         if not m:
+            # 星号 Chapter 家族不走中文数字，单独认一条；不认它的话
+            # 体检会说"0 条带序号的标题"，与清洗切出的 216 章对不上。
+            m_star = _STAR_NUM_TITLE.match(core)
+            if m_star:
+                nums.append(int(m_star.group(1)))
             continue
         v = cn_to_int(m.group(1))
         if v is None:

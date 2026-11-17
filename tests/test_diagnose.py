@@ -183,6 +183,48 @@ def case_framed_headings_recognized_and_numbered() -> None:
     assert numbered["monotonic"] is True, numbered
 
 
+def case_star_chapter_heading_is_recognized():
+    """**星号 Chapter 家族**（0.3.1）：`　　☆、CH.1` 这种章行要认得出、序号要读对。
+
+    来由：用户样本《超级玩家》全书 216 条章行都是这个形态，行首是
+    「全角空格 + ☆ + 顿号」，现有 `第N章类`（行首锚定「第」）与
+    `Chapter N`（行首锚定 CHAPTER）两条都挂空 —— 实测 216 行
+    `match_chapter()` 全部返回 None，整本被洗成 0 章、17794 段掉进前言。
+
+    字符口径：样本里是 **☆ U+2606（216 处）**，`⭐ U+2B50` 在这份文件里 0 处
+    （开发者看到的 emoji 是显示层替换）。★ U+2605 也一并收，但样本里没出现。
+
+    反面同样重要：正文里提到「CH.5」的句子**不许**被当成章行，所以判据必须
+    要求行首那颗星 + 顿号，光有 `CH.` 不算。
+    """
+    # 正例：全角空格 + ☆/★ + 顿号/点号 + CH.<数字>
+    for line in ("　　☆、CH.1", "　　★、CH.216", "☆.CH.7", " ☆、CH.42 ",
+                 "\u3000\u3000☆、CH.3"):
+        got = match_chapter(line)
+        assert got == "星号 Chapter", f"{line!r} 没被认成章行：{got!r}"
+
+    # 源文件里的异体写法：`CH1.19` / `CH1.198`（实测《超级玩家》216 行里 2 行这样写）。
+    # 不认它就少两章（会从 216 掉到 214），这是真章行，不是噪音。
+    for line in ("　　☆、CH1.19", "　　☆、CH1.198"):
+        got = match_chapter(line)
+        assert got == "星号 Chapter", f"异体写法 {line!r} 没被认出来：{got!r}"
+
+    # 反例：正文里的追述 / 缺星号 / 缺 CH 数字 / 别的符号
+    for line in ("顾嘉南后来想起 CH.5 那章", "CH.1", "☆、第一章", "★ 没有顿号 CH.2",
+                 "☆、CH.", "这个☆符号在句子中间 CH.3", "　　☆、CH.abc"):
+        got = match_chapter(line)
+        assert got != "星号 Chapter", f"{line!r} 被误判成章行了：{got!r}"
+
+    # 序号要读得出、且连成递增（体检的「章节结构可信」靠它）
+    numbered = _numbering([
+        "　　☆、CH.1",
+        "　　☆、CH.2",
+        "　　☆、CH.3",
+    ])
+    assert numbered["numeric_titles"] == 3, numbered
+    assert numbered["monotonic"] is True, numbered
+
+
 def main() -> int:
     cases = [
         case_ones_and_tens,
@@ -196,6 +238,7 @@ def main() -> int:
         case_whole_book_in_one_line_needs_a_long_line,
         case_strip_frame_peels_symmetric_borders,
         case_framed_headings_recognized_and_numbered,
+        case_star_chapter_heading_is_recognized,
     ]
     failed = 0
     for c in cases:

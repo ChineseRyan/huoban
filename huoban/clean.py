@@ -3716,6 +3716,15 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
     for it in items:
         if it.is_title:
             title = it.content.strip()
+            # 「星号 Chapter」（`　　☆、CH.1`）：章名只留 `CH.1`，不带星号与前导空白。
+            # 判据与取序号都在 model 里各有一份正则（那边判是不是章行、取第几章），
+            # 这里只负责把显示用的标题文字剥干净 —— 用户看到的目录不该顶一颗星。
+            if it.heading is not None and it.heading.family == "星号 Chapter":
+                stripped = model._STAR_CHAPTER_TITLE.match(title)
+                if stripped is not None:
+                    # 统一成 `CH.N`：源文件里有 `CH.19` 与 `CH1.198` 两种写法，
+                    # 目录里混着两种会让用户以为切错了。
+                    title = f"CH.{int(stripped.group(1))}"
             # 空壳标题合并：同一章的标题被原书写了两遍（一次在章首、一次是站点
             # 水印，如「正文 第009章：妙手回春」紧跟「山村野事 第009章：妙手回春」），
             # 第一遍后面一个字都没有。保留它就是一个 0 段落的空章节 + 一条
@@ -3727,7 +3736,12 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
             # 这里合并的是**标题字符串本身**（章还是那一章、正文一段不少），
             # 勾选它没有任何可保护的东西 —— 记进去只会让用户看到一堆勾了也
             # 没用的行。这是既有的口径边界（review 曾建议统一记账），维持现状。
-            if book.chapters:
+            # 星号 Chapter 家族的标题是机器编号（`CH.1`/`CH.2`…），**不参与同名合并**：
+            # `toc_key` 会把行尾的 `.1` 当页码砍掉（`CH.1`/`CH.2` 全归一成 `CH`），
+            # 一合并就把前几章吞成一章（实测三章只剩 `CH.3`）。那套合并是为
+            # 「同一章标题被原书写两遍」准备的，机器编号没有这种重复。
+            is_star_chapter = it.heading is not None and it.heading.family == "星号 Chapter"
+            if not is_star_chapter and book.chapters:
                 prev = book.chapters[-1]
                 prev_key = toc_key(_strip_site_prefix(prev.title))
                 if prev_key and prev_key == toc_key(_strip_site_prefix(title)):

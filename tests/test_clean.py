@@ -3942,6 +3942,91 @@ def case_pure_decorative_frame_is_still_a_separator() -> None:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# 星号 Chapter 章行（0.3.1，样本《超级玩家》）
+#
+# 用户样本的章行是 `　　☆、CH.N`（全角空格 + ☆ + 顿号 + CH.N），全书 216 条。
+# 现有判据都要求行首是「第」或「CHAPTER」，于是 216 条一条都没认出来，
+# 整本被洗成 0 章、一万七千多段掉进前言。这里钉两件事：切得出章、标题干净；
+# 同时钉反面：正文里提到 CH. 的句子不许被切成章。
+# ---------------------------------------------------------------------------
+
+
+def case_star_chapter_lines_are_cut_with_clean_titles():
+    """`　　☆、CH.N` 要切出章，章名取 `CH.N`，不带星号与前导空白。"""
+    text = _text(
+        "《假书》",
+        "",
+        "　　文案一段，讲这本书是什么。",
+        "",
+        "　　☆、CH.1",
+        "",
+        "第一段的正文，正常收尾。",
+        "",
+        "　　☆、CH.2",
+        "",
+        "第二段的正文，正常收尾。",
+        "",
+        "　　☆、CH.3",
+        "",
+        "第三段的正文，正常收尾。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == ["CH.1", "CH.2", "CH.3"], titles
+    assert len(res.book.chapters) == 3, len(res.book.chapters)
+    # 书头那句文案不能丢（它该进前言，不该被当成章）
+    front = [p.text for p in res.book.front_matter]
+    assert any("文案一段" in t for t in front), front
+    # 每章都该有正文
+    for ch in res.book.chapters:
+        assert _bodies(ch), f"{ch.title} 没有正文"
+
+
+def case_star_chapter_variant_spelling_is_normalized():
+    """异体 `CH1.19` 也要切成章，且章名统一成 `CH.19`。
+
+    实测《超级玩家》216 条星号章行里有 2 条写成 `CH1.19` / `CH1.198`（同一本书的
+    异体写法）。只认 `CH.` 会少两章；认了但原样显示，目录里就会混着
+    `CH.19` 与 `CH1.19` 两种名字。所以：认得出 + 归一。
+    """
+    text = _text(
+        "　　☆、CH.18",
+        "",
+        "第十八章正文。",
+        "",
+        "　　☆、CH1.19",
+        "",
+        "第十九章正文。",
+        "",
+        "　　☆、CH.20",
+        "",
+        "第二十章正文。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == ["CH.18", "CH.19", "CH.20"], titles
+    assert [c.number for c in res.book.chapters] == [18, 19, 20]
+
+
+def case_chapter_mention_inside_prose_is_not_a_heading():
+    """正文里提到「CH.5」的句子不是章行 —— 判据要求行首那颗星。"""
+    text = _text(
+        "　　第一章　开",
+        "",
+        "他想起 CH.5 那一章写过的话，觉得有点好笑。",
+        "",
+        "　　第二章　终",
+        "",
+        "收尾一段。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert len(res.book.chapters) == 2, titles
+    joined = " ".join(p.text for ch in res.book.chapters for p in ch.paragraphs)
+    assert "CH.5" in joined, "正文里那句话被当成章行吃掉了"
+
+
+# ---------------------------------------------------------------------------
 # 清洗中途检查点（todo/0.3.0.md 的「清洗中途检查点：取消及时生效、卡点能看见」）
 #
 # 界面**仍然不显示进度**（决定 7 不变）。on_step 只服务两件事：让取消在下一次
@@ -4268,6 +4353,10 @@ _CASES = [
     # 第 1 组验收：装饰边框章节标题
     case_framed_chapter_titles_are_cut_cleanly,
     case_pure_decorative_frame_is_still_a_separator,
+    # 0.3.1 星号 Chapter 章行（样本《超级玩家》）
+    case_star_chapter_lines_are_cut_with_clean_titles,
+    case_star_chapter_variant_spelling_is_normalized,
+    case_chapter_mention_inside_prose_is_not_a_heading,
     # 0.3.0 清洗中途检查点：取消及时生效、卡点能看见
     case_on_step_changes_nothing_when_omitted,
     case_on_step_reports_both_stages,

@@ -126,6 +126,19 @@ _HEADING_NUM = re.compile(
     r"^\s*第\s*([0-9０-９〇零一二三四五六七八九十百千万两壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]{1,10})\s*([卷部集篇章回节幕话話])"
 )
 _CHAPTER_EN = re.compile(r"^\s*[Cc][Hh][Aa][Pp][Tt][Ee][Rr]\s*([0-9]{1,4})")
+# 「星号 Chapter」（`　　☆、CH.1`）的序号：在 `CH.` 后面。
+# 与 diagnose 的「星号 Chapter」家族是同一条判据的两半 —— 那边判"是不是章行"，
+# 这里取"第几章"。两处正则必须同时认这个形态，否则家族认得出、序号恒为 None。
+_STAR_CHAPTER = re.compile(
+    r"^[\s\u3000]*[☆★]\s*[、.．]\s*[Cc][Hh][0-9]{0,2}\s*[.．]\s*([0-9]{1,4})\s*$"
+)
+# 章标题文本：剥掉行首的「星 + 顿号 + 空白」，留下 `CH.N`。
+# 用户看到的章名就该是 `CH.1`，不带 `☆、` 与前导全角空格。
+# 源文件里的异体 `CH1.19` 也在这里统一成 `CH.19` —— 同一本书两种写法，
+# 目录里出现两种章名只会让用户以为切错了。
+_STAR_CHAPTER_TITLE = re.compile(
+    r"^[\s\u3000]*[☆★]\s*[、.．]\s*[Cc][Hh][0-9]{0,2}\s*[.．]\s*([0-9]{1,4})\s*$"
+)
 # 「（一）」「（十二）」式分节的序号。括号里的数字同样是"第几个"，
 # 所以照样交给 cn_to_int() 转，不另写一套中文数字转换。
 _BRACKET_SECTION = re.compile(r"^\s*[（(]\s*([0-9０-９〇零一二三四五六七八九十百]{1,4})\s*[）)]\s*$")
@@ -199,6 +212,14 @@ def parse_heading(line: str) -> Heading | None:
         if m_en is not None:
             try:
                 number = int(m_en.group(1))
+            except ValueError:
+                number = None
+        elif _STAR_CHAPTER.match(line) is not None:
+            # 「星号 Chapter」（`　　☆、CH.1`）：序号在 CH. 后面。
+            # 与 diagnose 的「星号 Chapter」家族是同一条判据的两半，
+            # 那边判"是不是章行"，这里取"第几章"。
+            try:
+                number = int(_STAR_CHAPTER.match(line).group(1))
             except ValueError:
                 number = None
         elif family == "纯数字行":
