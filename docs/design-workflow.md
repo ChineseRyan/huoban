@@ -118,7 +118,7 @@ UI设计肥鱼 才正式进入设计阶段。
   3. `python -B tests/test_gui.py` 全绿；
   4. `python -B tools/smoke_test.py` 全绿。
 - 发布关口（逐个跑 `tests/`、`python -B tools/smoke_test.py`、PyInstaller 测试包与 sha256、
-  `使用说明.txt`、`CHANGELOG.md`）归编码肥鱼；这是关口，不构成 `ui.html` 的所有权。
+  `CHANGELOG.md`）归编码肥鱼；这是关口，不构成 `ui.html` 的所有权。
 - **没经过第 1 条，不算定稿**；测试全绿只说明没弄坏别的。
 
 ## 设计资产同步
