@@ -39,6 +39,7 @@
 设计需求（能跑、但要改观感或交互，不是 bug）怎么从 `todo/` 条目走到出稿、三稿对比、开发者评判、定稿、落地、验收与资产登记 → 详见 `docs/design-workflow.md`。边界：用户感知到的「错误行为」走 BUG 管理办法。
 ### 测试与发版节奏
 `todo/` 下当前版本文件里的条目全部解决后，主动打包测试包交开发者——细则见 `docs/bugfix-workflow.md` 的「测试期」一节。
+**GitHub release 必须与仓库代码版本一致**（tag 指向 `__version__` 等于该版本号的提交，不许打 HEAD；版本号超过最新 release 就要立刻发版或退回版本号）——细则见 `docs/release-package.md` 的「发版后同步到 GitHub Release」一节。
 ### 设计资产管理
 #### 项目开发设计资产管理
 图标 / 底纹 / 背景 / 印面都在 `gui/assets/`，库存与母版关系见 `docs/design-assets.md`。
