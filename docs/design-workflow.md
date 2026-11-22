@@ -99,7 +99,7 @@ UI设计肥鱼 才正式进入设计阶段。
     含首屏拖拽的 dragenter/dragover/drop/dragend 状态判定与分类纯函数、drop 后的
     状态保持与兜底定时器、contextmenu 菜单渲染、关于页外链按钮的
     `preventDefault()` / `stopPropagation()`。断言同归属：`tests/test_gui.py` 的
-    「界面（`gui/ui.html`）的静态不变量」一节 + `node tools/ui_resize_check.js`
+    「界面（`gui/ui.html`）的静态不变量」一节 + `tools/ui_resize_check.js`
     八尺寸回归；谁动 `ui.html` 谁改这些断言，先红后绿。
   - **编码肥鱼** 管 `huoban/`、`gui/api.py`（全部 js_api 方法）、`gui/app.py`
     （窗口、`_register_drop`、`_dropped_paths`、`__onDropPath` 派发与载荷格式、
@@ -114,7 +114,15 @@ UI设计肥鱼 才正式进入设计阶段。
     是同一个 `_debug()` 开关，归编码肥鱼管。
 - 验收缺一不算完：
   1. 开发者逐屏验收，明确说没问题；
-  2. 八档窗口尺寸截图回归（`node tools/ui_resize_check.js`，八尺寸全过）；
+  2. 八档窗口尺寸回归：`node tools/ui_resize_check.js <页面 URL>`，看末行
+     「✓ 8 个尺寸全过」。
+     **必须同时看两件事，缺一条这个结论就不成立**：
+     - **URL 不能省**。脚本不带 URL 时一档都不跑，却照样打印「✓ 0 个尺寸全过」。
+     - **每档的地标数不能是 0**。页面没打开、地址写错、选择器全对不上时，
+       脚本照样打印 8 档全过——判定逻辑只报「发现问题」，不报「没测到东西」。
+       所以末行「全过」之外，还要确认每档括号里的地标数不是 0（首屏现在是 2 个）。
+     地址写 `file:///` 加 `gui/ui.html` 的绝对路径；浏览器不在默认安装位置时，
+     用 `CHROME` 环境变量指到本机的 Chrome 内核可执行文件（脚本文件头有说明）。
   3. `python -B tests/test_gui.py` 全绿；
   4. `python -B tools/smoke_test.py` 全绿。
 - 发布关口（逐个跑 `tests/`、`python -B tools/smoke_test.py`、PyInstaller 测试包与 sha256、
