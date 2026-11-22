@@ -3454,7 +3454,12 @@
   function rvAllSeen() {
     if (!rv.groups.length) { return false; }
     for (var i = 0; i < rv.groups.length; i++) {
-      if (!rv.seen[rv.groups[i].key]) { return false; }
+      var g = rv.groups[i];
+      // 判据和左侧那盏灯一致（见 rvDrawDir）：点过了，或者这一类本来就是 0。
+      // 数字是 0 说明没有东西要复核，算已看 —— 否则五类全 0 的干净书，
+      // 右下角那颗按钮永远不转绿，而那本书根本没有可看的地方。
+      if (rv.seen[g.key] || g.num === 0) { continue; }
+      return false;
     }
     return true;
   }
@@ -3475,7 +3480,9 @@
       b.dataset.k = g.key;
       if (g.key === rv.key) { b.className = "on"; }
       var dot = document.createElement("span");
-      dot.className = "sk-seen" + (rv.seen[g.key] ? " on" : "");
+      // 两种亮法：这一类点过了，或者它本来就是 0（没有东西要复核）。
+      // 0 的那一类让人先点一下才亮，是多余动作（2026-11-22 开发者定）。
+      dot.className = "sk-seen" + ((rv.seen[g.key] || g.num === 0) ? " on" : "");
       var nm = document.createElement("span");
       nm.className = "nm";
       nm.textContent = g.name;
@@ -4811,8 +4818,23 @@
   //   兜底 750ms：拖的是网页文字 / 图片时 Python 取不到路径，__onDropPath
   //   根本不会来，到点自己清态并复位墨团；
   //   完全没表态 → 立即清，不留残影。
-  // 仍然只清态，不 preventDefault、不 stopPropagation：拦默认行为与取绝对路径
-  // 都是 Python 端那个 DOMEventHandler 的活（见 gui/app.py 的 _register_drop）。
+  //
+  // 默认行为**必须在 JS 侧兜底拦住**（2026-11-22 定因），绝对路径仍由 Python 侧
+  // 的 DOMEventHandler 取，两者互不干扰 —— 这是两件事，别混成一件：
+  //   · 取路径：只有 Python 侧的 DOMEventHandler 拿得到 `pywebviewFullPath`，
+  //     JS 这边拿不到，所以注册必须在 Python 侧（见 gui/app.py 的 _register_drop）。
+  //   · 拦默认动作：谁拦都行，而且 JS 侧**必须**拦。Python 侧那条路要
+  //     `num_listeners > 0` 才起效，而页面从 pywebview 注入运行时起就能接收鼠标 ——
+  //     到 _register_drop 做完两次 evaluate_js 之间有一段窗口期，那时没有任何人
+  //     preventDefault，WebView2 的 AllowExternalDrop（默认 True）会接管，
+  //     表现为偶发弹出系统的「打开文件」窗口。
+  //
+  // 补这一句**不会妨碍取路径**：pywebview 在 dom/element.py 生成的 handler 是
+  //     function(e){ e.preventDefault(); window.pywebview._jsApiCallback(...) }
+  // —— preventDefault 在前、取路径的 postMessageWithAdditionalObjects 在后，
+  // 同一个函数内；而且 preventDefault 只取消默认动作，不阻止事件送达其它监听器。
+  // 所以谁要是想把这句删掉，先看 tests/test_gui.py 的
+  // case_ui_drop_listener_blocks_the_default_action。
   var dropClearTimer = null;
 
   function scheduleDropClear() {
@@ -4823,7 +4845,9 @@
     }, 750);
   }
 
-  document.addEventListener("drop", function () {
+  document.addEventListener("drop", function (ev) {
+    // 兜底拦默认行为（见上面那段）：与 Python 侧是否已注册无关。
+    ev.preventDefault();
     var area = el("drop-area");
     var state = area.getAttribute("data-drop");
     if (state === "drag") {

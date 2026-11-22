@@ -82,6 +82,15 @@ class Paragraph:
     # 清洗 TXT 那条线永远不写这两个字段，to_dict 也只在非空时才写。
     anchor: str = ""
     refs: list[dict] = field(default_factory=list)
+    # 这一段在**清洗前原文**里的起始行号（1 基），只有清洗 TXT 那条线会填。
+    # **不进 JSON、不参与序列化**（`_paragraph_to_dict` 不写它，schema 不变）。
+    # 为什么需要它：段落树里"注文续行"和"紧跟的正文"长得一模一样，光看文字
+    # 分不开。原文行号是唯一可靠证据 —— 续行必须紧挨上一行（见
+    # clean.py 的 `_strip_note_marks`）。EPUB 导入那条线留 0（没有原文行号）。
+    src_line: int = 0
+    # 这一段**覆盖到的原文末行号**（并碎行会把后面几行吸收进来）。
+    # 0 表示"与 src_line 相同"。同样不进 JSON。续行判定要拿它算相邻。
+    src_line_end: int = 0
 
 
 @dataclass

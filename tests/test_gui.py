@@ -1844,6 +1844,38 @@ def case_review_payload_gives_every_row_key_for_select_all():
     assert "function rvAllKeys" in src and "rvAllKeys(g).forEach" in src, "全选没接全量 keys"
 
 
+def case_review_zero_group_lights_up_without_a_click():
+    """数字是 0 的那一类，小灯直接点亮，不用点一遍（2026-11-22 开发者定）。
+
+    依据：数字 0 就代表这一类没有东西要复核，让人先点一下才亮是多余动作。
+    连带两件事必须一起改，否则界面自相矛盾：
+      ① 灯的判据要认 num === 0（不然灯亮着、按钮还不转绿）；
+      ② `rvAllSeen()` 也要把 num === 0 算成已看（不然五类全 0 的干净书，
+         按钮永远不转绿 —— 而那本书根本没有东西可看）。
+    只改「什么时候亮」，灯的尺寸、颜色、过渡一个字不动。
+    """
+    src = _ui_source()
+
+    # 灯的判据：两种亮法 —— 点过了，或者这一类本来就是 0
+    dot = src[src.find('var dot = document.createElement("span");'):]
+    dot = dot[:dot.find("host.appendChild(b);")]
+    assert 'dot.className = "sk-seen"' in dot, "灯的类名被人改了"
+    assert "rv.seen[g.key]" in dot, "点过才亮的判据被删了"
+    assert "g.num === 0" in dot, "0 的那一类没有直接点亮"
+    assert '" on"' in dot, "点亮用的类名没了"
+
+    # 按钮转绿的判据必须和灯一致
+    allseen = src[src.find("function rvAllSeen()"):]
+    allseen = allseen[:allseen.find("\n  }")]
+    assert "rv.seen[g.key]" in allseen, "已看判据没接上"
+    assert "g.num === 0" in allseen, "0 的类没算成已看：干净书按钮永远不转绿"
+
+    # 设计定稿的三样东西不许被顺手改
+    assert ".sk-seen.on { background: var(--seen); opacity: 1; }" in src, \
+        "灯的颜色被改了（设计已定稿）"
+    assert "width: 5px; height: 5px" in src, "灯的尺寸被改了（设计已定稿）"
+
+
 # ---------- 界面（gui/ui.html）的静态不变量 ----------
 #
 # 这一组不启动窗口，只读 ui.html 的文本。上一轮 review 抓出三个「界面明明有、
@@ -1854,6 +1886,46 @@ def case_review_payload_gives_every_row_key_for_select_all():
 
 def _ui_source() -> str:
     return (ROOT / "gui" / "ui.html").read_text(encoding="utf-8")
+
+
+def case_ui_drop_listener_blocks_the_default_action():
+    """`drop` 监听器里必须有 `ev.preventDefault()` —— 默认行为要在 JS 侧兜住。
+
+    为什么这条是硬要求（2026-11-22 定因，证据在 pywebview 源码里）：
+    Python 侧那条路要 `num_listeners > 0` 才起效
+    （`webview/platforms/edgechromium.py` 的 `on_script_notify`：
+    `if _dnd_state['num_listeners'] == 0: return`），而它从
+    `webview/util.py` 起线程注入运行时就已开始接收鼠标 —— 从那一刻到
+    `gui/app.py` 的 `_register_drop` 做完两次 `evaluate_js` 之间，有一段
+    「默认行为无人拦」的窗口期。这期间拖进第一本书，WebView2 的
+    `AllowExternalDrop`（默认 True，pywebview 从不设置）会接管，表现为
+    偶发弹出系统的「打开文件」窗口。
+
+    JS 侧补一句 `preventDefault` 就与 Python 侧是否就绪无关了。
+    **它不会妨碍取绝对路径**：`webview/dom/element.py` 生成的 handler 是
+    `function(e){ e.preventDefault(); window.pywebview._jsApiCallback(...) }` ——
+    `preventDefault` 在前、取路径的 `postMessageWithAdditionalObjects` 在后，
+    同一个函数内，且 `preventDefault` 只取消默认动作、不阻止事件送达别的监听器。
+
+    所以别再把它删掉：删了这句，偶发弹窗会回来，而用例是唯一拦得住的地方。
+    """
+    src = _ui_source()
+    # 找到 drop 监听器那一段（从 addEventListener("drop" 到它的结束 }）, false);）
+    start = src.find('document.addEventListener("drop"')
+    assert start > 0, "ui.html 里找不到 drop 监听器"
+    tail = src[start:]
+    end = tail.find("}, false);")
+    assert end > 0, "drop 监听器没有以 }, false); 收尾，形态变了要同步改用例"
+    block = tail[: end + 1]
+    assert "preventDefault" in block, (
+        "drop 监听器里没有 preventDefault —— 窗口期内默认行为无人拦，"
+        "拖第一本书会偶发弹出系统「打开文件」窗口。"
+        "注意它只拦默认动作，不影响 Python 侧取绝对路径。"
+    )
+    # 光有字符串不够：必须真的调在 ev 上
+    assert re.search(r"\b(ev|e|event)\.preventDefault\(\)", block), (
+        "drop 监听器里出现了 preventDefault 但没有调用在事件对象上：" + block[:200]
+    )
 
 
 def case_ui_every_button_has_a_listener():
@@ -3039,7 +3111,10 @@ _CASES = [
     case_ui_ink_glyphs_come_from_the_payload,
     case_book_glyphs_fall_back_to_front_matter_when_no_chapters,
     case_review_payload_gives_every_row_key_for_select_all,
-    case_ui_every_button_has_a_listener,
+    # 2026-11-22 开发者定：数字 0 的那一类，小灯直接点亮
+    case_review_zero_group_lights_up_without_a_click,
+    case_ui_drop_listener_blocks_the_default_action,
+ case_ui_every_button_has_a_listener,
     case_ui_every_view_is_reachable,
     case_ui_done_page_keeps_its_payload,
     case_ui_polling_respects_the_job_badge,

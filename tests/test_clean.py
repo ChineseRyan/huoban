@@ -4203,6 +4203,286 @@ def case_duplicate_chapters_reported_only_when_merged():
     assert "合并了 0" not in items[0]["text"], items[0]["text"]
 
 
+def case_circled_note_block_becomes_note_with_refs():
+    """「短横线 + 圈码」的注释块要变成 note 段，正文注码要生成 refs。
+
+    用户样本《高尔基-童年》的真实形态（实测）：
+
+        正文……米哈伊尔①舅舅的黑头发……
+        ----------------            ← 纯分隔线（16 个短横线）
+        --------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。
+
+    要的效果（开发者定，乙方案）：正文里的 ① 渲成可点的上标链接（弹注），
+    章末仍保留注释区（阅读器不支持弹注时还能翻到），分隔线不许漏进成品正文。
+
+    **配对规则（写死，不许猜）**：正文注码与注释行注码按**圈码字符本身**配对，
+    且**必须在同一章内**；同章内同字符出现多次时，只认「正文注码 → 纯分隔线 →
+    注释行」三行紧邻的那一组。配不上的（只有正文没注文、或只有注文没正文）
+    **一律原样保留**，不许编号、不许猜。
+    """
+    text = _text(
+        "第一章 起",
+        "",
+        "　　他说这话的时候，米哈伊尔①舅舅正好走进来。",
+        "",
+        "----------------",
+        "",
+        "--------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。",
+        "",
+        "　　后面又是别的话了。",
+        "",
+        "第二章 止",
+        "",
+        "　　这里有个没人注的②记号，注释块里没有它。",
+        "",
+        "　　收尾一段。",
+    )
+    res = clean_text(text, source="假书.txt")
+    ch1, ch2 = res.book.chapters
+
+    # 1) 正文注码生成了 refs，偏移指向那字符**删掉之后**的位置
+    #    （原意图是"at 指向段内那个字符"；2026-11-22 修缺陷 1 之后正文里
+    #    不再有那个字符，at 变成"链接要插在第 at 个字符之前"，仍然精确）
+    body = [p for p in ch1.paragraphs if p.kind == "body" and "米哈伊尔" in p.text]
+    assert body, [p.text for p in ch1.paragraphs]
+    ref_p = body[0]
+    assert len(ref_p.refs) == 1, ref_p.refs
+    ref = ref_p.refs[0]
+    assert ref["label"] == "①", ref
+    assert "①" not in ref_p.text, f"原圈码没从正文里拿掉：{ref_p.text!r}"
+    assert ref_p.text[ref["at"]:ref["at"] + 1] == "舅", (ref_p.text, ref["at"])
+
+    # 2) 注释行进 note，带 anchor，且 refs 指过去能找到
+    notes = [p for p in ch1.paragraphs if p.kind == "note"]
+    assert len(notes) == 1, [(p.kind, p.text[:20]) for p in ch1.paragraphs]
+    assert notes[0].anchor, "注释段必须给 anchor，否则正文的链接没有落点"
+    assert ref["note"] == notes[0].anchor, (ref, notes[0].anchor)
+    # 注释正文里的短横线前缀要剥干净
+    assert not notes[0].text.startswith("-"), notes[0].text
+
+    # 3) 围住注释块的纯分隔线不许留下（kind=sep 也要清掉）
+    seps = [p for p in ch1.paragraphs if p.kind == "sep"]
+    assert not seps, f"注释块周围的分隔线没清掉：{[p.text for p in seps]}"
+
+    # 4) 没注释的 ② 原样留在正文，不许生成 refs
+    orphan = [p for p in ch2.paragraphs if "②" in p.text]
+    assert orphan, [p.text for p in ch2.paragraphs]
+    assert not orphan[0].refs, f"没有注文的注码不许编 refs：{orphan[0].refs}"
+    assert "②" in orphan[0].text, "配不上的注码必须原样保留"
+
+
+def case_body_text_drops_the_original_circled_mark():
+    """正文里的圈码原字符必须被 refs 取代，不许原字符和链接并排。
+
+    2026-11-22 开发者实测报的缺陷 1：成品里印成「米希加①(①)是个没心没肺
+    的驴」—— 前一个 ① 是原文里的字符，后一个才是我们插的 noteref 链接。
+
+    根因：_strip_note_marks 只 append 了 refs，没从 src_para.text 里删掉
+    那个圈码字符；渲染层 `_inline_html` 在 at 处插链接、同时把 text 原样
+    拼回去，于是同一个字符出现两次。
+
+    **判据（可机器判定）**：配上的注码那一段，正文段文字里**不许再有**该圈码
+    字符；refs 的 at 仍指向"原来那个字符所在的位置"，渲染时链接正好顶替它。
+    """
+    text = _text(
+        "第一章 起",
+        "",
+        "　　他说这话的时候，米哈伊尔①舅舅正好走进来。",
+        "",
+        "----------------",
+        "",
+        "--------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。",
+        "",
+        "　　后面又是别的话了。",
+    )
+    res = clean_text(text, source="假书.txt")
+    ch = res.book.chapters[0]
+
+    body = [p for p in ch.paragraphs if p.kind == "body" and "米哈伊尔" in p.text]
+    assert body, [p.text for p in ch.paragraphs]
+    p = body[0]
+    assert len(p.refs) == 1, p.refs
+    ref = p.refs[0]
+
+    # 硬判据：正文段文字里不许再出现这个圈码字符
+    assert "①" not in p.text, (
+        f"正文段里原圈码没被替换掉，成品会出现两个 ①：{p.text!r}"
+    )
+    # 链接插在"原来那个字符所在的位置"上：删掉圈码之后，at 处的文字正好是
+    # 圈码后面那个字（本例是「舅」），而且 at 之前是「米哈伊尔」。
+    assert ref["at"] == len("他说这话的时候，米哈伊尔"), (p.text, ref["at"])
+    assert p.text[ref["at"]:ref["at"] + 1] == "舅", (p.text, ref["at"])
+    assert ref["label"] == "①", ref
+
+
+def case_note_text_left_the_body_flow_into_the_chapter_end():
+    """注文只许出现在章末注释区，正文流里不许再留一份。
+
+    2026-11-22 开发者实测报的缺陷 2：注释原文「米希加和雅希加：分别是…」
+    出现在了正文流的原位置，还带着一条灰线。
+
+    根因（两个叠加）：
+      1. 识别出的 note 段**留在原位置**，`_render_paragraphs` 在那儿直接渲成
+         `<div class="notes">`，于是章中间冒出一个注释区；
+      2. 连续注释块里，第二条注文（`②共济会：…`）前面是第一条注文、不是
+         纯分隔线，按「三行紧邻」判据配不上，被当成普通正文留在流里。
+
+    本用例把两点一起钉住：最后一个正文段的段落序号必须小于第一个 note 段的
+    序号（= 注文全被移到章末），且正文流里不含注文原文。
+    """
+    text = _text(
+        "第一章 起",
+        "",
+        "　　他说这话的时候，米希加①是个没心没肺的驴，雅希加则是个共济会②员。",
+        "",
+        "----------------",
+        "",
+        "--------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。",
+        "②共济会：是１８世纪产生于欧洲的一个宗教团体。",
+        "",
+        "　　后面又是别的话了。",
+        "",
+        "　　收尾一段。",
+    )
+    res = clean_text(text, source="假书.txt")
+    ch = res.book.chapters[0]
+    kinds = [(p.kind, p.text[:24]) for p in ch.paragraphs]
+
+    notes = [p for p in ch.paragraphs if p.kind == "note"]
+    assert len(notes) == 2, f"两条注文都要认成 note：{kinds}"
+
+    # 1) 注文原文不许留在正文流里
+    for n in notes:
+        body_hit = [
+            p for p in ch.paragraphs
+            if p.kind == "body" and n.text and n.text in p.text
+        ]
+        assert not body_hit, f"注文原文还在正文流里：{[p.text for p in body_hit]}"
+
+    # 2) 所有 note 段必须排在所有正文段之后（章末）
+    idx_note = [i for i, p in enumerate(ch.paragraphs) if p.kind == "note"]
+    idx_body = [i for i, p in enumerate(ch.paragraphs) if p.kind == "body"]
+    assert idx_note and idx_body, kinds
+    assert min(idx_note) > max(idx_body), (
+        f"note 段没移到章末：note 在 {idx_note}，正文在 {idx_body}"
+    )
+
+    # 3) 两条注文都要有 anchor，两条 refs 指过去都能找到
+    anchors = {n.anchor for n in notes}
+    assert all(anchors), [n.anchor for n in notes]
+    src = [p for p in ch.paragraphs if p.kind == "body" and p.refs]
+    assert len(src) == 1 and len(src[0].refs) == 2, [(p.text, p.refs) for p in src]
+    assert {r["note"] for r in src[0].refs} == anchors, src[0].refs
+    # 两个圈码都从正文里拿掉了
+    assert "①" not in src[0].text and "②" not in src[0].text, src[0].text
+
+
+def case_note_block_stays_end_of_chapter_and_notes_area_survives():
+    """移到章末之后，注释区的内容一条都不许丢（弹注 + 章末保留，乙方案）。"""
+    text = _text(
+        "第一章 起",
+        "",
+        "　　他说这话的时候，米哈伊尔①舅舅正好走进来。",
+        "",
+        "----------------",
+        "",
+        "--------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。",
+        "",
+        "　　后面又是别的话了。",
+    )
+    res = clean_text(text, source="假书.txt")
+    ch = res.book.chapters[0]
+    notes = [p for p in ch.paragraphs if p.kind == "note"]
+    assert len(notes) == 1, [(p.kind, p.text) for p in ch.paragraphs]
+    assert "米希加和雅希加" in notes[0].text, notes[0].text
+    assert "分别是米哈伊尔和雅可夫的蔑视称呼" in notes[0].text, notes[0].text
+    assert notes[0].anchor, "章末注释段必须带 anchor，否则弹注没有落点"
+    # 注释区必须在最后
+    assert ch.paragraphs[-1].kind == "note", [(p.kind, p.text[:16]) for p in ch.paragraphs]
+
+
+def case_note_continuation_line_folds_into_previous_note():
+    """注释块内的无圈码续行，要并进上一条 note，不许漏回正文流。
+
+    2026-11-22 用户样本《高尔基-童年》块 5 的真实形态（原文行 1749-1750）：
+
+        正文……却像恶毒的押沙龙①！
+        ----------------
+        -----------①典见《旧约全书》：
+        　　大卫王即以色列王，押沙龙为其子，杀兄夺父位，后兵败而亡。
+
+    第二行没有圈码，是上一条注文的续行。判据（开发者定）：
+
+      · 块内某行**以圈码开头 → 新注文**；
+      · 否则 → **上一条的续行**，拼进同一条 note；
+      · 续行**必须还在同一个注释块内** —— 块在遇到第一个非圈码、非续行的
+        正文段时就结束，不许跨块去吞后面的正文。
+
+    为什么不能简单"紧跟的行都并"：那样会把注释块后面那段正文吞进注释。
+    本用例末尾特意放了一段正文，钉住"不越界"。
+    """
+    text = _text(
+        "第一章 起",
+        "",
+        "　　他唱起歌来却像恶毒的押沙龙①！",
+        "",
+        "----------------",
+        "",
+        "-----------①典见《旧约全书》：",
+        "　　大卫王即以色列王，押沙龙为其子，杀兄夺父位，后兵败而亡。",
+        "",
+        "　　这里是注释块之后的正文，绝不许被吞进注释。",
+        "　　再来一段收尾。",
+    )
+    res = clean_text(text, source="假书.txt")
+    ch = res.book.chapters[0]
+    kinds = [(p.kind, p.text[:22]) for p in ch.paragraphs]
+
+    notes = [p for p in ch.paragraphs if p.kind == "note"]
+    assert len(notes) == 1, f"续行不许另开一条 note：{kinds}"
+    note = notes[0]
+    assert "典见《旧约全书》" in note.text, note.text
+    assert "大卫王即以色列王" in note.text, f"续行没并进注文：{note.text!r}"
+    assert "杀兄夺父位" in note.text, note.text
+
+    # 续行不许留在正文流里
+    body_hit = [p for p in ch.paragraphs if p.kind == "body" and "大卫王即以色列王" in p.text]
+    assert not body_hit, f"续行还留在正文流里：{[p.text for p in body_hit]}"
+
+    # 边界：注释块之后那段正文必须原样还在，且没被吞进 note
+    after = [p for p in ch.paragraphs if p.kind == "body" and "注释块之后的正文" in p.text]
+    assert len(after) == 1, f"注释块后面的正文被吞了：{kinds}"
+    assert "注释块之后的正文" not in note.text, "续行判据越界，吞掉了块后的正文"
+    assert "再来一段收尾" not in note.text, "续行判据越界"
+
+    # 正文注码仍然拿掉、refs 仍然指得到这条 note
+    src = [p for p in ch.paragraphs if p.kind == "body" and p.refs]
+    assert len(src) == 1, [(p.text, p.refs) for p in src]
+    assert "①" not in src[0].text, src[0].text
+    assert src[0].refs[0]["note"] == note.anchor, (src[0].refs, note.anchor)
+
+
+def case_normal_separator_is_kept_not_eaten_by_note_cleanup():
+    """`kind="sep"`（＊＊＊＊＊＊ 这种场景分隔线）一根都不许动。
+
+    清注释块周围的分隔线时极易误伤：这两者同为 `kind="sep"`。
+    判据必须是「紧邻注释块」而不是「是分隔线」—— 否则全书场景分隔线被清光。
+    """
+    text = _text(
+        "第一章 起",
+        "",
+        "　　前面一段话。",
+        "",
+        "＊＊＊＊＊＊",
+        "",
+        "　　后面一段话。",
+    )
+    res = clean_text(text, source="假书.txt")
+    seps = [p for p in res.book.chapters[0].paragraphs if p.kind == "sep"]
+    assert len(seps) == 1, f"普通场景分隔线被误清：{[(p.kind, p.text) for p in res.book.chapters[0].paragraphs]}"
+    assert seps[0].text.strip() == "＊＊＊＊＊＊", seps[0].text
+
+
 # ---------------------------------------------------------------------------
 # 清洗中途检查点（todo/0.3.0.md 的「清洗中途检查点：取消及时生效、卡点能看见」）
 #
@@ -4541,6 +4821,13 @@ _CASES = [
     case_duplicate_chapter_same_number_and_same_content_is_merged,
     case_duplicate_chapter_same_number_different_content_is_kept,
     case_duplicate_chapters_reported_only_when_merged,
+    # 0.4.0 圈码注释块：note 段 + 正文 refs + 围住注释块的分隔线
+    case_circled_note_block_becomes_note_with_refs,
+    case_body_text_drops_the_original_circled_mark,
+    case_note_text_left_the_body_flow_into_the_chapter_end,
+    case_note_block_stays_end_of_chapter_and_notes_area_survives,
+    case_note_continuation_line_folds_into_previous_note,
+    case_normal_separator_is_kept_not_eaten_by_note_cleanup,
     # 0.3.0 清洗中途检查点：取消及时生效、卡点能看见
     case_on_step_changes_nothing_when_omitted,
     case_on_step_reports_both_stages,

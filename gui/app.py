@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from .api import Api
@@ -74,6 +75,16 @@ def _register_drop(window) -> None:
     `e.preventDefault()`，而且只有在 `Element.on` 里走 DOMEventHandler 分支时
     pywebview 才会把 `_dnd_state['num_listeners']` 加一 —— 那个计数为 0 时，
     平台层收到 FilesDropped 会直接丢弃，路径永远到不了 Python 侧。
+
+    注意这两件事是分开的，别混：
+      · **取绝对路径**只能在这里做（`pywebviewFullPath` 只在这一侧存在）；
+      · **拦默认动作** JS 侧也要兜一层（见 gui/ui.html 的 drop 监听器）——
+        本函数要等活动页加载完、再跑两次 evaluate_js 才生效，之前有一段窗口期。
+
+    `get_element("body")` 可能返回 None（pywebview 的 `dom/dom.py` 是
+    `return Element(...) if node_id else None`），直接 `.on()` 会抛
+    AttributeError，而这个回调是在 `loaded` 事件里跑的 —— 抛出去就静默丢了，
+    界面上表现为"拖了没反应"，没有任何线索。所以这里重试几次、失败留日志。
     """
     import webview
 
@@ -87,9 +98,47 @@ def _register_drop(window) -> None:
             "window.__onDropPath && window.__onDropPath(%s)" % _js_str(paths[0])
         )
 
-    window.dom.get_element("body").on(
-        "drop", webview.dom.DOMEventHandler(on_drop, prevent_default=True)
-    )
+    handler = webview.dom.DOMEventHandler(on_drop, prevent_default=True)
+    # body 理论上一定存在，但 evaluate_js 有往返延迟、loaded 也可能早于解析完，
+    # 所以给它几次机会。间隔逐次拉长：第一次没拿到多半只差一两帧。
+    last_error: Exception | None = None
+    for delay in (0, 0.05, 0.2, 0.5):
+        if delay:
+            time.sleep(delay)
+        try:
+            element = window.dom.get_element("body")
+            if element is None:
+                last_error = LookupError("document.querySelector('body') 取不到节点")
+                continue
+            element.on("drop", handler)
+            return
+        except Exception as exc:  # noqa: BLE001 - 注册失败不许把程序带崩
+            last_error = exc
+    # 走到这里：拖放这条路没接上。写日志（不 print —— 库代码只返回数据，
+    # 日志走入口侧的既有惯例，见 gui/launcher.py 的 huoban-error.log）。
+    _log_drop_register_failure(last_error)
+
+
+def _log_drop_register_failure(exc: Exception | None) -> None:
+    """拖放注册失败时写一行可定位的日志。
+
+    为什么必须留痕：失败的表现是"拖文件没反应"，用户没法描述得更具体，
+    没有日志就完全查不出是 `body` 取不到、还是 pywebview 改了内部结构。
+    日志位置与 gui/launcher.py 的 excepthook 一致（exe 旁 / 项目根）。
+    """
+    lines = [
+        "拖放注册失败：drop 监听器没能挂到 body 上，拖文件将没有反应。",
+        f"原因：{type(exc).__name__}: {exc}" if exc else "原因：未知",
+        "",
+    ]
+    try:
+        from gui.launcher import _log_dir
+
+        target = _log_dir() / "huoban-error.log"
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n" + "-" * 60 + "\n")
+    except Exception:  # noqa: BLE001 - 记日志本身不能把程序再弄崩一次
+        pass
 
 
 def _dropped_paths(event: dict) -> list[str]:

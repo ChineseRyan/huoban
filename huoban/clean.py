@@ -3818,6 +3818,306 @@ def _guess_metadata(paragraphs: list[Paragraph]) -> tuple[str, str]:
 _STUB_MAX_PARAGRAPHS = 6
 
 
+# 圈码注释（用户样本《高尔基-童年》的当页批注形态）。
+#
+# 真实形态（实测行 276-280）：
+#     “……米希加①是个没心没肺的驴，雅希加则是个共济会②员！”
+#     ----------------
+#     --------①米希加和雅希加：分别是米哈伊尔和雅可夫的蔑视称呼。
+#     ②共济会：是１８世纪产生于欧洲的一个宗教团体。…
+#
+# 判据收得极窄，三道全过才认：
+#   ① 注释行 = 一条（或多条）短横线 + 圈码 + 注释正文（`^-{3,}\s*[①-⑳]`）；
+#   ② 它**必须紧跟在一条纯分隔线之后**（样本里那一行 16 个短横线），
+#      且那条纯分隔线前面紧邻的就是带该圈码的正文段 —— 这就是「正文注码 →
+#      分隔线 → 注释行」三行一组；
+#   ③ 配对按**圈码字符本身**、且**在同一章内**，不按出现顺序、不按序号猜。
+# 配不上的（只有正文没注文、或只有注文没正文）一律原样保留，一个字都不动。
+#
+# 只认圈码不认「①②」以外的记号：字符集限定 U+2460–U+2473（①..⑳），
+# 别的书偶然出现的杂符号不会被卷进来。
+_CIRCLED = "\u2460-\u2473"
+# 注释行：**以圈码开头**即可，前面有没有短横线都算。2026-11-22 实测的四种形态：
+#   `--------①米希加和雅希加：…`（横线 + 圈码）
+#   `②共济会：…`                （直接圈码，同一块里的续行）
+#   `①米哈洛的昵称…`            （直接圈码，整块只有这一条）
+# 原来要求「短横线 + 圈码」是错的：那样同一块里的第 2、3 条全被判成正文。
+NOTE_LINE = re.compile(r"^(?:-{3,}\s*)?(?P<mark>[" + _CIRCLED + r"])\s*(?P<body>.*)$")
+_NOTE_LEAD = re.compile(r"^(?:-{3,}\s*)?["
+                        + _CIRCLED + r"]")
+_PURE_RULE = re.compile(r"^-{3,}$")
+
+
+def _note_body(text: str) -> str:
+    """取走注释行开头的短横线与圈码，返回注文正文（可能为空）。"""
+    m = NOTE_LINE.match(text.strip())
+    return m.group("body").strip() if m else text.strip()
+
+
+def _is_note_line(text: str) -> bool:
+    """这一行是不是一条注文的**开头**（自带圈码）。"""
+    return NOTE_LINE.match(text.strip()) is not None
+
+
+def _join_note_without_gap(head: str, tail: str) -> bool:
+    """续行直接续在上一行后面时，两段之间要不要加空格？
+
+    返回 True = 直接拼接（中文行文里注释的续行本来就是接着往下写）。
+    返回 False = 用换行分隔（前一段以句末标点收尾，或后一段以标点领起 ——
+    那是两句独立的话，粘成一行会读成一句）。
+    """
+    if not head:
+        return True
+    if head[-1] in "。！？…；：、，,.;:!?":
+        return False
+    if tail and tail[0] in "。！？…；：、，,.;:!?）)】」』":
+        return False
+    return True
+
+
+# 续行的上限：一句注释的补充说明不会长到一整页。超过这个长度的段落当作
+# 正文（宁可漏并一句，也不要把一整段正文塞进注释区）。
+_NOTE_CONTINUATION_MAX = 200
+
+
+def _note_continuation_ok(text: str, prev_text: str) -> bool:
+    """这一行能不能并进上一条 note（= 块内续行）。
+
+    **调用前提**：上一行刚被认成注文，且本行在原文里紧挨着上一行
+    （调用方已用 `_is_adjacent_line` 判过）。这里只管"文字上接不接得上"。
+
+    三条判据，缺一不可：
+      1. **上一条注文必须"话没说完"** —— 以冒号/分号/逗号/破折号/省略号收尾，
+         或者压根没有句末标点。这是区分"续行"和"后面的正文"的关键：
+         块 5 的 `典见《旧约全书》：` 是冒号，接得上一句解释；
+         块 1 的 `…都默不作声。` 已经句号收尾，下一行 218 就是正文了
+         （实测这两个在原书里行号都紧邻，光看行号分不开）。
+      2. 本行不是空行、不是纯分隔线（分隔线是新块的引子）。
+      3. 长度不超过 `_NOTE_CONTINUATION_MAX`，且不以引号开头 ——
+         对白几乎都是正文（块 4 的 `④别尔米人：…劝茨冈：` 后面就是
+         `“瓦尼亚，千万别跟老头子说！` 这么一句对白）。
+    """
+    s = text.strip()
+    if not s:
+        return False
+    if _PURE_RULE.match(s):
+        return False
+    if len(s) > _NOTE_CONTINUATION_MAX:
+        return False
+    if s[0] in "“”\"'「」『』":
+        return False
+    head = (prev_text or "").rstrip()
+    if not head:
+        return False
+    # 上一条已经以句末标点收尾 = 这条注释写完了，后面是正文
+    if head[-1] in "。！？!?":
+        return False
+    return True
+
+
+def _is_adjacent_line(para, prev_end: int) -> bool:
+    """这一段在原文里是不是紧挨着上一行（`prev_end + 1`）。
+
+    **这是"续行不许越界"的硬判据**（开发者 2026-11-22 定：续行必须在同一个
+    注释块内，即仍在「分隔线之后、下一个非空正文段之前」的范围）。
+
+    为什么不能只靠文字形态判断：段落树里"注文续行"和"紧跟的正文"长得一模一样，
+    原书正是用**空行**把注释块和后面的正文隔开的；可空行在清洗中会被折叠，
+    段落树里看不到它。原文行号是唯一剩下的可靠证据 —— 续行必须紧挨上一行，
+    中间隔着空行就说明块已经结束（块 5 的「大卫王即以色列王…」正好紧挨
+    上一行 1749，而块后正文中间隔着空行）。
+
+    `src_line` 为 0 表示这一段没有原文行号（EPUB 导入那条线）：此时**不许**
+    当续行，宁可漏并一句也不要把正文吞进注释。
+    """
+    cur = getattr(para, "src_line", 0) or 0
+    if not cur or not prev_end:
+        return False
+    return cur == prev_end + 1
+
+
+def _strip_note_marks(chapters: list) -> tuple[int, int]:
+    """把「正文注码 → 纯分隔线 → 注文（1 条或多条）」认出来，变成 note + refs。
+
+    返回 (认出的注释块数, 生成 refs 的条数)。**不猜**：配不上的一律不动。
+
+    为什么在章节树建好之后做、而不是在 _scan 里逐行做：
+    配对要有「章」这个作用域才能唯一 —— 全书同字符可能出现几十次，逐行视野里
+    根本分不清哪个注码对应哪条注文。章节树建好之后每章自己一列段落，
+    配对范围就是这一章，歧义当场消失。
+
+    **注释块的判据（2026-11-22 按真实样本重定，原判据漏了两类形态）**：
+    一条纯分隔线之后、紧邻的、**以圈码开头的行**（1 行或多条）都是同一个
+    注释块的成员。第一行可能带短横线也可能不带，块内后续行一律不带。
+
+    三条边界，缺一不可：
+      · 必须**前面紧挨着一条纯短横线分隔线** —— 别处偶然出现的圈码行不许当注释；
+      · 每条注文**各自开头有圈码**才能算一条独立注释（连续两行 `①…` `②…`
+        是两条，不是一条的两段）；
+      · 注释块必须**紧跟在一个正文段之后**，那个正文段就是注码的宿主。
+
+    修掉的三个缺陷（开发者 2026-11-22 实测报的）：
+      1. 正文里原圈码没删 → 成品印成「米希加①⑴…」两个圈号并排。
+         现在认出来就从正文 text 里把那个字符删掉，refs 的 at 留在原位置，
+         渲染时链接正好顶替它。
+      2. 注文留在正文流里 → 章中间冒出一个注释区、还带条灰线。
+         现在 note 段统一移到**章末**（渲染层再把连续的 note 成组包
+         `<div class="notes">`），正文流里不再有第二份。
+      3. `②共济会：…` 这种不带短横线的续行没被认出来 → ② 压根没弹注。
+    注释区的内容**一条都不删**：开发者要的是「弹注 + 章末保留」两者都有。
+    """
+    blocks = 0
+    refs_made = 0
+    for ch in chapters:
+        paras = ch.paragraphs
+        # 第一步：找出所有注释块。每块 = (分隔线下标, [注释行下标…], 宿主正文段下标)
+        # 块的边界（开发者 2026-11-22 钉死）：从纯分隔线之后开始，**一直延伸到
+        # 第一个既不是"圈码开头"、也不是"块内续行"的段落为止**。
+        # 续行的判定见下面 _is_continuation 的说明 —— 必须有"刚认过注文"作前提，
+        # 所以块不会越过边界去吞掉后面的正文。
+        found: list[tuple[int, list[int], int]] = []
+        i = 0
+        while i < len(paras):
+            if not _PURE_RULE.match(paras[i].text.strip()):
+                i += 1
+                continue
+            # paras[i] 是纯分隔线，往下吃：圈码开头的当新注文，其余当上一条的续行
+            j = i + 1
+            members: list[int] = []
+            prev_was_note = False
+            last_end = 0
+            prev_text = ""
+            while j < len(paras):
+                t = paras[j].text
+                if _is_note_line(t):
+                    members.append(j)
+                    prev_was_note = True
+                    last_end = paras[j].src_line_end or paras[j].src_line
+                    prev_text = _note_body(t)
+                    j += 1
+                    continue
+                if (
+                    prev_was_note
+                    and _note_continuation_ok(t, prev_text)
+                    and _is_adjacent_line(paras[j], last_end)
+                ):
+                    # 续行：留着下标，第二步里拼进上一条 note
+                    members.append(j)
+                    prev_text = f"{prev_text}{t.strip()}"
+                    last_end = paras[j].src_line_end or paras[j].src_line
+                    j += 1
+                    continue
+                break
+            if not members:
+                i += 1
+                continue
+            # 宿主：分隔线前面那一段，且必须是正文段
+            host = i - 1
+            if host >= 0 and paras[host].kind == "body":
+                found.append((i, members, host))
+            i = j
+
+        if not found:
+            continue
+        # 第二步：给每条注文定性（kind=note、剥前缀、给 anchor），
+        # 同时把这条注文自己的圈码字符记下来 —— 下一步配正文要用。
+        # **块内续行**（无圈码、紧跟上一条注文的行）拼进上一条的 text，
+        # 并且把续行那段从段落表里去掉（它的文字已经进 note 了，不许再单独占一段）。
+        note_idx: set[int] = set()
+        merged_idx: set[int] = set()
+        mark_of: dict[int, str] = {}
+        for rule, members, _host in found:
+            last_note: int | None = None
+            for k in members:
+                para = paras[k]
+                m = NOTE_LINE.match(para.text.strip())
+                if m is None:
+                    # 续行：拼到上一条 note 的文字后面
+                    if last_note is None:
+                        continue
+                    tail = para.text.strip()
+                    if not tail:
+                        continue
+                    host_para = paras[last_note]
+                    host_para.text = f"{host_para.text}{tail}" if _join_note_without_gap(
+                        host_para.text, tail
+                    ) else f"{host_para.text}\n{tail}"
+                    merged_idx.add(k)
+                    continue
+                body = m.group("body").strip()
+                if not body:
+                    # 只剩圈码没有正文：不是可用的注文，别造一个空注释
+                    continue
+                mark_of[k] = m.group("mark")
+                para.kind = "note"
+                para.text = body
+                para.anchor = f"note-{ch.start_line}-{k}"
+                note_idx.add(k)
+                last_note = k
+        # 第三步：正文侧删掉原圈码、补 refs
+        for rule, members, host in found:
+            src = paras[host]
+            for k in members:
+                mark = mark_of.get(k)
+                if not mark:
+                    continue
+                at = src.text.find(mark)
+                if at < 0:
+                    # 正文里没有这个圈码 → 配不上，注释段仍留在章末（可见），
+                    # 但不造 refs、也不把它当可点落点
+                    continue
+                # 后面的 refs 偏移先跟着前面被删掉的字符数前移
+                for other in src.refs:
+                    if other["at"] > at:
+                        other["at"] -= 1
+                src.refs.append({
+                    "at": at,
+                    "note": paras[k].anchor,
+                    "label": mark,
+                })
+                # 关键：把原圈码从正文里拿掉，否则成品会印出两个并排的圈号
+                src.text = src.text[:at] + src.text[at + 1:]
+                refs_made += 1
+                blocks += 1
+        # 第四步：note 段统一挪到章末，正文流里不再留第二份。
+        # 围住注释块的那条纯分隔线也在这里一起删 —— 它原本只起"把注文和
+        # 正文隔开"的作用，进了成品会在阅读器里变成一条莫名其妙的横线。
+        # 只删被认进注释块的那一条（found 里记着下标），场景分隔线
+        # （＊＊＊＊＊＊ 那种 kind="sep"）一根都不动。
+        drop_idx = {rule for rule, _members, _host in found}
+        if note_idx or drop_idx or merged_idx:
+            keep: list = []
+            for idx, p in enumerate(paras):
+                if idx in note_idx:
+                    continue
+                if idx in drop_idx:
+                    continue
+                # 续行已经拼进上一条 note 的 text，它自己这段不许再留下
+                if idx in merged_idx:
+                    continue
+                keep.append(p)
+            tail = [p for idx, p in enumerate(paras) if idx in note_idx]
+            ch.paragraphs = keep + tail
+    return blocks, refs_made
+
+
+def _drop_note_rules(chapters: list) -> int:
+    """已并入 `_strip_note_marks`，**保留函数只为兼容旧调用点**，恒返回 0。
+
+    历史：这个函数原先是"删紧挨 note 段之前的那条纯短横线"。2026-11-22 把
+    note 段改成统一移到章末之后，那种"相邻关系"在树里已经不存在了 —— 分隔线
+    和 note 段被拆到两处，再靠相邻判断就永远匹配不上。所以删除动作挪进
+    `_strip_note_marks` 的第四步：认块的时候就记着分隔线下标，一起删。
+    这样也保住原来那条边界：**只删被认进注释块的那一条**，场景分隔线
+    （`＊＊＊＊＊＊` 这种 `kind="sep"`）一根都不动。
+
+    为什么保留这个函数而不是删掉：调用点在 `_build_book`，以及报告里
+    `note_rules_dropped` 这个键的历史含义。改成删函数会牵动报告契约，
+    而这条计数本来就不进界面（开发者 2026-11-22 定），不值得为它改契约。
+    """
+    return 0
+
+
 def _merge_identical_chapters(book: Book) -> int:
     """把"章号相同、正文也逐段相同"的重复章并成一条；返回并掉的章数。
 
@@ -3961,7 +4261,7 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
         if it.blank:
             # 章首的空行不留（紧跟在标题后面）；章内空行留作场景分隔
             if current and current:
-                current.append(Paragraph("", kind="blank"))
+                current.append(Paragraph("", kind="blank", src_line=it.no))
             continue
         target = current if current is not None else book.front_matter
         # 诗词/韵文单独一类：渲染层据此居中换楷体（见 epub.py 的 p.verse）。
@@ -3971,7 +4271,9 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
             kind = "verse"
         else:
             kind = "body"
-        target.append(Paragraph(it.content, kind=kind))
+        target.append(Paragraph(
+            it.content, kind=kind, src_line=it.no, src_line_end=it.last_no or it.no,
+        ))
 
     for lst in [book.front_matter, *(c.paragraphs for c in book.chapters)]:
         while lst and lst[-1].kind == "blank":
@@ -3995,7 +4297,18 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
     # 章号相同**而且**正文逐段完全相同才合并。见 _merge_identical_chapters。
     # 合并数经第二个返回值交给报告 —— 不许静默合并，用户得知道章为什么少了。
     merged_duplicates = _merge_identical_chapters(book)
-    return book, {"duplicate_chapters": merged_duplicates}
+    # 圈码注释（0.4.0）：正文注码 → pure 分隔线 → 注释行 三行一组，
+    # 认出来之后注释行进 kind="note"、正文段拿 refs（弹注靠它）。
+    # 配不上的原样保留 —— 见 _strip_note_marks 的注释。
+    note_blocks, note_refs = _strip_note_marks(book.chapters)
+    # 围住注释块的那条纯短横线要删掉；场景分隔线（＊＊＊＊＊＊）一根都不动。
+    note_rules = _drop_note_rules(book.chapters)
+    return book, {
+        "duplicate_chapters": merged_duplicates,
+        "note_blocks": note_blocks,
+        "note_refs": note_refs,
+        "note_rules_dropped": note_rules,
+    }
 
 
 # ---------------------------------------------------------------------------
