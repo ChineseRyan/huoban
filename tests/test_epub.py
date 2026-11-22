@@ -117,6 +117,14 @@ def _seps(root) -> list:
     return [d for d in root.findall(".//xhtml:div", NS) if d.get("class") == "sep"]
 
 
+def _nav_lis(result) -> list:
+    """nav.xhtml 里**顶层**的 li 元素（不含嵌套 ol 里的子项）。"""
+    nav = ET.fromstring(_read(result, "OEBPS/nav.xhtml"))
+    ol = nav.find(".//xhtml:nav/xhtml:ol", NS)
+    assert ol is not None, "nav.xhtml 里没有 <nav><ol>"
+    return ol.findall("xhtml:li", NS)
+
+
 def _metas(result) -> dict:
     """content.opf 的 <meta>：property 或 name 作键，content 或文本作值。"""
     opf = _xml(result, "OEBPS/content.opf")
@@ -846,7 +854,16 @@ def case_degenerate_books() -> None:
 
 
 def case_front_tail_matter() -> None:
-    """前言折进第一章标题之前、后记折进最后一章末尾，不额外造文件。"""
+    """书前内容单独成「前附」卷（独立文件 + 目录一条），后记仍折进最后一章。
+
+    0.4.0 的意图翻转：0.4.0 之前前言是**折进第一章文件、排在 <h1> 之前**的，
+    读者点「第1章」会先落在简介上 —— 用户反馈「第一章前面的内容被并入第一章」
+    说的就是这件事。现在前言变成 level=2 的「前附」卷，自己占一个 xhtml 文件、
+    在目录里有独立一条，正文与第一章一个字不动。
+
+    后记没有批准要改，继续折在最后一章末尾 —— 这一条也一并钉住，
+    免得以后有人"顺手"把后记拆出去。
+    """
     book = _book(
         _chapter("第一章", ["甲。"]),
         _chapter("第二章", ["乙。"]),
@@ -854,15 +871,110 @@ def case_front_tail_matter() -> None:
         tail=[Paragraph(text="后记。")],
     )
     result = _build(book)
-    assert not [n for n in result.files if "front" in n or "tail" in n]
 
-    first = _chapter_roots(result)[0]
-    assert _tags(first) == ["p", "h1", "p"], "前言必须在章标题之前"
-    assert _paras(first) == ["前言。", "甲。"]
-
-    last = _chapter_roots(result)[1]
-    assert _paras(last) == ["乙。", "后记。"]
+    # 1) 书前内容有自己一个文件，且目录里有独立一条（标题固定「前附」）
+    roots = _chapter_roots(result)
+    assert len(roots) == 3, f"应是 前附 + 2 章，实际 {len(roots)} 个章节文件"
+    front = roots[0]
+    assert _tags(front) == ["h1", "p"], f"前附页应是 标题 + 前言段，实际 {_tags(front)}"
+    h1 = front.find(".//xhtml:h1", NS)
+    assert h1.text == "前附", h1.text
+    # 2) 前附是卷语义：h1 带 class="vol"
+    assert (h1.get("class") or "") == "vol", "前附是卷级，h1 必须带 class=vol"
+    assert _paras(front) == ["前言。"]
+    # 3) 第一章的文件里**不许**再有前言（这就是用户报的那个 bug）
+    first = roots[1]
+    assert _tags(first) == ["h1", "p"], f"第一章文件只该有标题和正文，实际 {_tags(first)}"
+    assert _paras(first) == ["甲。"], _paras(first)
+    # 4) 后记仍折进最后一章末尾（本轮不改这一侧）
+    last = roots[2]
+    assert _paras(last) == ["乙。", "后记。"], _paras(last)
     assert result.paragraphs == 4
+    # 5) 前附在目录里是顶层一条、且不认领后面的章
+    lis = _nav_lis(result)
+    assert [li.find(".//xhtml:a", NS).text for li in lis] == ["前附", "第一章", "第二章"]
+    assert (lis[0].get("class") or "") == "vol"
+    for li in lis:
+        assert li.find("xhtml:ol", NS) is None, "前附无子项，后面的章也不是它的子项"
+
+
+def case_no_front_matter_means_no_front_volume() -> None:
+    """front_matter 为空时**不许**凭空多一条「前附」。
+
+    0.4.0 的反面：合成的前附是从 front_matter 来的，空着就没有这一页。
+    样本《高尔基-童年》清洗后 front_matter 是 0 段 —— 那种书不该多出一页空白。
+    """
+    result = _build(_book(_chapter("第一章", ["甲。"]), _chapter("第二章", ["乙。"])))
+    titles = [li.find(".//xhtml:a", NS).text for li in _nav_lis(result)]
+    assert titles == ["第一章", "第二章"], titles
+    assert "前附" not in "".join(titles)
+    # 章节文件数就是章数，没有多出来的那一页
+    assert len(_chapter_roots(result)) == 2, _chapter_roots(result)
+    hrefs = [li.find(".//xhtml:a", NS).get("href") for li in _nav_lis(result)]
+    assert hrefs == ["Text/chap0001.xhtml", "Text/chap0002.xhtml"], hrefs
+
+
+def case_no_chapters_with_front_matter_still_works() -> None:
+    """0 章兜底不许破：全书没有章节时，前言后记仍要合成一页 chap0001。
+
+    这是既有兜底（见 case_no_chapters_front_matter_kept），前附上线后必须仍然成立 ——
+    前附是"给有章节的书在正文前加一页"，不能顶替"整本书只有前言"的救命通道。
+    """
+    book = _book(
+        front=[Paragraph(text="前言第一段。"), Paragraph(text="前言第二段。")],
+        tail=[Paragraph(text="后记。")],
+    )
+    result = _build(book)
+    chaps = [n for n in result.files if n.startswith("OEBPS/Text/chap")]
+    assert chaps == ["OEBPS/Text/chap0001.xhtml"], chaps
+    root = _chapter_roots(result)[0]
+    # 没有章节可挂时前附不合成，所以这一页就是纯前言+后记，没有「前附」标题
+    assert "前附" not in "".join(root.find(".//xhtml:h1", NS).itertext() if root.find(".//xhtml:h1", NS) is not None else [])
+    assert _paras(root) == ["前言第一段。", "前言第二段。", "后记。"]
+    assert result.paragraphs == 3
+
+
+def case_front_volume_does_not_swallow_chapters() -> None:
+    """前附是卷，但**不认领**后面的章；序章/第一章仍是它的同级。
+
+    普通卷会把后面的章挂成子项（天龙那本的 43/5/24 就是这么来的）。前附必须例外，
+    否则整本书的章全挂到「前附」底下，目录变成一棵歪树。
+    同时钉住顺序：前附 → 序章 → 第一章。
+    """
+    book = _book(
+        _chapter("序章", ["序正文。"]),
+        _chapter("第一章", ["甲。"]),
+        front=[Paragraph(text="版权页。")],
+    )
+    result = _build(book)
+    lis = _nav_lis(result)
+    titles = [li.find(".//xhtml:a", NS).text for li in lis]
+    assert titles == ["前附", "序章", "第一章"], titles
+    for li in lis:
+        assert li.find("xhtml:ol", NS) is None, "谁都不该有子项"
+    # 前附排在最前，序章在它之后、第一章之前
+    hrefs = [li.find(".//xhtml:a", NS).get("href") for li in lis]
+    assert hrefs == [
+        "Text/chap0001.xhtml", "Text/chap0002.xhtml", "Text/chap0003.xhtml",
+    ], hrefs
+
+
+def case_tail_matter_still_folds_into_last_chapter() -> None:
+    """后记仍折进最后一章（本轮只改书前内容，没批准改后记）。
+
+    这条是"别顺手改多了"的护栏：前附改成独立一页之后，很容易有人觉得
+    "后记也拆出来吧"——没批准。后记继续跟在最后一章正文之后。
+    """
+    result = _build(
+        _book(
+            _chapter("第一章", ["甲。"]),
+            _chapter("第二章", ["乙。"]),
+            tail=[Paragraph(text="后记。")],
+        )
+    )
+    roots = _chapter_roots(result)
+    assert len(roots) == 2, roots
+    assert _paras(roots[-1]) == ["乙。", "后记。"], _paras(roots[-1])
 
 
 # ---------- i) 落盘 ----------
@@ -1218,7 +1330,11 @@ def case_noteref_dangling_becomes_plain_text() -> None:
 
 
 def case_volume_title_page_standalone() -> None:
-    """第 1 章就是卷时：卷标题页只放卷标题，前言折进第一个叶子章。"""
+    """第 1 章就是卷时：卷标题页只放卷标题，前附自己一页（不折进这一章）。
+
+    0.4.0 意图翻转：旧行为是「前言折进第一个叶子章、排在标题之前」。现在前言
+    变成独立的「前附」卷，所以这里断言的是"卷标题页干净、前附另占一页"。
+    """
     book = _book(
         _chapter("第一卷 卷名", [], level=2),
         _chapter("第一章", ["甲。"]),
@@ -1226,18 +1342,25 @@ def case_volume_title_page_standalone() -> None:
     )
     result = _build(book)
     roots = _chapter_roots(result)
-    vol = roots[0]
+    # roots[0] = 前附，roots[1] = 卷名页，roots[2] = 第一章
+    front = roots[0]
+    assert front.find(".//xhtml:h1", NS).text == "前附"
+    assert _paras(front) == ["前言。"]
+
+    vol = roots[1]
     assert _tags(vol) == ["h1"], f"卷标题页只该有标题，实际 {_tags(vol)}"
     assert (vol.find(".//xhtml:h1", NS).get("class") or "") == "vol"
 
-    first = roots[1]
-    assert _tags(first) == ["p", "h1", "p"], "前言要折进第一个叶子章，且在标题之前"
-    assert _paras(first) == ["前言。", "甲。"]
+    first = roots[2]
+    assert _tags(first) == ["h1", "p"], f"第一章只该有标题和正文，实际 {_tags(first)}"
+    assert _paras(first) == ["甲。"], _paras(first)
     assert result.paragraphs == 2
 
-    # 全书只有卷、没有叶子章时，前言退回第 1 章 —— 内容绝不能因为找不到落点而丢
+    # 全书只有卷、没有叶子章时，正文内容仍然不能丢（0 段章节 + 前附，兜底要成立）
     only_vol = _build(_book(_chapter("卷一", [], level=2), front=[Paragraph(text="前言。")]))
-    assert _tags(_chapter_roots(only_vol)[0]) == ["p", "h1"]
+    only_roots = _chapter_roots(only_vol)
+    assert only_roots[0].find(".//xhtml:h1", NS).text == "前附"
+    assert only_roots[1].find(".//xhtml:h1", NS).text == "卷一"
 
 
 # ---------- f) 2026-11-09 用户反馈：诗词块行距 / 字体子集 ----------
@@ -1325,6 +1448,11 @@ def main() -> int:
         case_deterministic,
         case_degenerate_books,
         case_front_tail_matter,
+        # 0.4.0 前附（卷）：书前内容独立成页 + 目录独立一条
+        case_no_front_matter_means_no_front_volume,
+        case_no_chapters_with_front_matter_still_works,
+        case_front_volume_does_not_swallow_chapters,
+        case_tail_matter_still_folds_into_last_chapter,
         case_write_epub_roundtrip,
         case_all_xml_wellformed,
         # 只读复核提出的回归用例（脏元数据 / level>=3 / 0 章前言 / 封面字节）

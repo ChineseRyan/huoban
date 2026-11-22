@@ -53,7 +53,7 @@ import io
 import re
 import uuid
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -587,6 +587,56 @@ def _level_of(ch: Chapter, where: str, warnings: list[str]) -> int:
     return 2
 
 
+# 书前内容那一页在目录里显示的名字。**不许叫「目录」** —— 「卷首特殊章」家族里
+# 含「目录」二字，取这个名等于给自己挖坑；也别跟着原书里那行「内容简介」走，
+# 因为书前内容可能只有版权页、只有作者行。用中性的「前附」，开发者最初用的词。
+FRONT_MATTER_TITLE = "前附"
+
+
+def _front_matter_chapter(book: Book) -> Chapter | None:
+    """把书前内容包成一条 level=2 的「前附（卷）」；没有书前内容就返回 None。
+
+    为什么在渲染层造这个节点、而不是让 clean 层产出（0.4.0 定的路线 B）：
+    EPUB 导入那条路填的是 book.front_matter（导入器认「序/前言/版权页」），
+    清洗层根本不经过它。只在 epub.py 这边合成，两条来源才会出同一个包。
+
+    **它只活在渲染用的视图里**（见 _render_view），不写回章节树、不进 JSON：
+    book.front_matter 与 SCHEMA_VERSION 一个字都不动。
+
+    level=2 是「卷」语义：正文那边 h1 带 class="vol"（字号更大、留白更多），
+    目录那边是一行可点的条目。序章/楔子/引子本来各自就是 level=1 的一章，
+    是它的**同级**、不是子项，所以这里不给它挂子章。
+    """
+    if not book.front_matter or not book.chapters:
+        # 没有书前内容 → 不出现这一条（不许凭空多一条空的前附）。
+        # 没有章节 → 走 _render_chapters 里"全书只有前言后记"的既有兜底，
+        # 那条路把 front+tail 合成 chap0001，不能让前附把它顶掉。
+        return None
+    return Chapter(
+        title=FRONT_MATTER_TITLE,
+        number=None,
+        level=2,
+        start_line=0,
+        paragraphs=list(book.front_matter),
+    )
+
+
+def _render_view(book: Book) -> Book:
+    """渲染用的书籍视图：书前内容变一条「前附」卷，front_matter 腾空。
+
+    返回的是浅拷贝，**原 book 一个字段都不改**（build_epub 的纯函数承诺）。
+    渲染、目录、NCX、spine、字体子集、插图收集全部基于这个视图跑，
+    所以"书前内容单独成一个文件 + 目录里独立一条"是自然发生的，
+    不需要在每一处各加一段特判。
+
+    没有书前内容时原样返回 —— 这类书的产物与改动前逐字节相同。
+    """
+    front = _front_matter_chapter(book)
+    if front is None:
+        return book
+    return replace(book, front_matter=[], chapters=[front, *book.chapters])
+
+
 def _render_chapters(
     book: Book,
     lang: str,
@@ -597,11 +647,14 @@ def _render_chapters(
 ) -> tuple[list[tuple[str, str, str]], int]:
     """渲染所有章节文件，返回 ([(包内路径, 标题, 文档文本)], 段落总数)。
 
-    为什么前言/后记要折进第一/最后一章的 xhtml：契约里的包结构是固定的
-    （cover / nav / toc / css / chapNNNN），没有给"前言页"留位置。
-    折进相邻章节是唯一"既不丢内容、又不多造文件"的办法。前言具体落在
-    "第一个叶子章"上（见下方 front_at）：这样卷标题页上只剩卷标题，
-    卷首那一页才真的是一页"分卷题头"。
+    书前内容从 0.4.0 起**不再是这里拼进去的**：它在 _render_view 里已经变成
+    一条 level=2 的「前附」卷，按普通章节渲染成独立文件、在目录里有自己一条。
+    所以传进来的 book 的 front_matter 通常已经是空的（见 _render_view）。
+    下面还留着"front_matter 折进第一个叶子章"的分支，是因为 _render_chapters
+    也可能被直接调用（测试、或将来别的调用方传原始 book）；那条路只是兜底，
+    不是主路径。
+
+    后记仍折进最后一章末尾 —— 本次只动书前内容，后记的归属没批准要改。
 
     没有章节（只有前言后记的书，或清洗把标题全删了）时，前言后记本身就是
     全部正文 —— 单独渲成 chap0001.xhtml。**绝不能只报警告就丢掉**：
@@ -867,6 +920,27 @@ def _is_volume(ch: Chapter) -> bool:
         return False
 
 
+def _is_front_volume(ch: Chapter) -> bool:
+    """这一条是不是渲染层合成的「前附（卷）」。
+
+    判据取三个条件同时成立：level>=2（是卷）、没有编号（合成节点才有）、
+    标题恰好是 FRONT_MATTER_TITLE。**不改 schema、不加字段** —— 这是
+    渲染视图里唯一一个这样的节点（见 _front_matter_chapter）。
+
+    为什么必须把它单独认出来：普通卷会"认领"它后面的章（挂在它下面当子项），
+    而前附后面紧跟的序章/楔子/第一章是它的**同级**，不是它的子项。
+    照普通卷处理，整本书的章会全挂到「前附」底下，目录变成一棵歪树。
+    """
+    try:
+        if int(_text_of(ch.level)) < 2:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if ch.number is not None:
+        return False
+    return _text_of(ch.title) == FRONT_MATTER_TITLE
+
+
 def _toc_nodes(book: Book) -> list[tuple[int, list[int]]]:
     """把章节树整理成目录的两个层级：[(顶层的章节下标, [它下面的章下标]), ...]。
 
@@ -875,6 +949,9 @@ def _toc_nodes(book: Book) -> list[tuple[int, list[int]]]:
     - 卷下面的章挂进该卷；
     - 卷本身没有下属章时也是叶子（"正文卷"这种光有标题没有章的形态确实存在）。
     没有卷的书，所有章都在顶层 —— 目录自然就是平铺的，不需要特判。
+
+    「前附（卷）」例外（0.4.0）：它是卷、但没有子项，也不许认领后面的章。
+    所以它进顶层之后**不设置 volume_at** —— 后面的序章/第一章仍挂顶层。
     """
     nodes: list[tuple[int, list[int]]] = []
     # 记住"当前卷"的位置，而不是"最后一个节点"：没有卷的书里，上一个顶层节点
@@ -886,7 +963,8 @@ def _toc_nodes(book: Book) -> list[tuple[int, list[int]]]:
         # 在正文里却按章排版，读者点目录跳不到的层级就出来了。
         if _is_volume(ch):
             nodes.append((idx, []))
-            volume_at = len(nodes) - 1
+            # 前附不认领后继章：它只是把自己那一页挂上顶层。
+            volume_at = None if _is_front_volume(ch) else len(nodes) - 1
         elif volume_at is None:
             nodes.append((idx, []))
         else:
@@ -1927,12 +2005,17 @@ def build_epub(
     # 这里不再重复报警告 —— 同一件事在报告里出现两遍，会让人以为有两个问题。
     cover = _load_cover(cover_path, warnings)
     back = _load_back_cover(back_cover, warnings)
+    # 渲染视图：书前内容变一条 level=2 的「前附」卷（见 _render_view）。
+    # 之后所有下游都基于这个视图跑 —— 正文、目录、NCX、spine、字体子集、插图
+    # 收集，一处不漏，否则会出现"目录里有前附、spine 里没有"这种自相矛盾的包。
+    # 原 book 不改（纯函数承诺）；没有书前内容时视图就是 book 本身。
+    view = _render_view(book)
     # 章节内插图要在渲染正文之前读进来：_render_paragraphs 需要知道
     # "哪些图片文件真的存在"，否则会写出一堆指向空文件的 <img>（裂图）。
-    chapter_images = _load_chapter_images(book, image_dir, warnings)
+    chapter_images = _load_chapter_images(view, image_dir, warnings)
     images_ok = set(chapter_images)
     chapter_docs, paragraph_count = _render_chapters(
-        book, lang, book_title, warnings, images_ok=images_ok
+        view, lang, book_title, warnings, images_ok=images_ok
     )
 
     cover_name, cover_media = (cover[0], cover[1]) if cover else (None, None)
@@ -1945,7 +2028,7 @@ def build_epub(
     # 字体规划要在拼 content.opf 之前完成（manifest 里要写字体条目）。
     # 它是整个流程里最慢的一步（两套字体实测约 6 秒），但顺序上绕不开：
     # 好在它内部自己吞掉所有失败并降级，不会把异常抛到这里。
-    font_plan = _plan_embed_fonts(book, fonts, warnings)
+    font_plan = _plan_embed_fonts(view, fonts, warnings)
     # 包内路径 → (manifest 里的 id, href, media-type)。
     font_items = [
         (
@@ -1969,8 +2052,8 @@ def build_epub(
         for name, (_src, media) in chapter_images.items()
     ]
 
-    nav_doc = _nav_doc(lang, book)
-    ncx_doc = _ncx_doc(book, book_title, book_id)
+    nav_doc = _nav_doc(lang, view)
+    ncx_doc = _ncx_doc(view, book_title, book_id)
     # 骨架三件套（opf/nav/ncx）坏掉 = 整本书打不开，所以这三个用严格模式：
     # 自检不过直接抛错，不许"打个包出来让用户自己发现"。
     _selfcheck("nav.xhtml", nav_doc, warnings, strict=True)
