@@ -4027,6 +4027,183 @@ def case_chapter_mention_inside_prose_is_not_a_heading():
 
 
 # ---------------------------------------------------------------------------
+# 双编号判据收窄 + 书名号章节前缀 + 重复章合并（0.3.2，两本用户样本）
+#
+# 样本一《这个明星来自地球》：标题正文里带「第二部」被「一行两个编号就判正文」
+#   那条误杀，全书少一章（744 章，章号 1..745 缺 511）。
+# 样本二《高尔基-童年》：章行是「《童年》章节：第01章  收集：名著小说网(Http://…)」，
+#   行首锚点挂空 → 切出 0 章；且同一章在源文件里整章重复（第 10 章三次）。
+# ---------------------------------------------------------------------------
+
+
+def case_title_with_volume_word_after_separator_is_still_a_title():
+    """标题正文里有「第二部」这种词，不许被「双编号」判据误杀。
+
+    判据收窄成：**两个编号必须并列（紧挨、中间没有别的字符）**才判正文。
+    「第511章：第二部电影」里两个编号隔着「：」，不是并列 → 是标题。
+    反例那一侧由 case_double_heading_number_not_title 继续钉着
+    （「第一幕第二幕第三幕」三个编号首尾相接，照样判正文）。
+    """
+    text = _text(
+        "第510章：声明",
+        "",
+        "第一段正文，正常收尾。",
+        "",
+        "第511章：第二部电影",
+        "",
+        "第二段正文，正常收尾。",
+        "",
+        "第512章：忘记她和挂住你",
+        "",
+        "第三段正文，正常收尾。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == [
+        "第510章：声明",
+        "第511章：第二部电影",
+        "第512章：忘记她和挂住你",
+    ], titles
+    assert [c.number for c in res.book.chapters] == [510, 511, 512]
+
+
+def case_book_title_chapter_prefix_is_stripped():
+    """「《书名》章节：第01章」这个站点前缀要剥掉，章名不带前缀也不带广告尾。
+
+    样本《高尔基-童年》全书 17 条章行都是
+    「《童年》章节：第01章  收集：名著小说网(Http://www.mingzhuxiaoshuo.com)」。
+    前缀「《童年》章节：」squeeze 后 7 字，超过 _SITE_PREFIX_MAX=6，旧逻辑原样
+    返回 → 行首锚点挂空 → 全书 0 章、5721 段全进前言。
+    """
+    text = _text(
+        "《童年》章节：第01章  收集：名著小说网(Http://www.mingzhuxiaoshuo.com)",
+        "",
+        "第一段正文，正常收尾。",
+        "",
+        "《童年》章节：第02章  收集：名著小说网(Http://www.mingzhuxiaoshuo.com)",
+        "",
+        "第二段正文，正常收尾。",
+    )
+    res = clean_text(text, source="童年.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == ["第01章", "第02章"], titles
+    assert [c.number for c in res.book.chapters] == [1, 2]
+    # 广告尾一个字都不许留在章名里
+    joined = " ".join(titles)
+    for bad in ("收集", "名著小说网", "http", "Http"):
+        assert bad not in joined, f"章名里还留着广告尾 {bad!r}：{titles}"
+
+
+def case_chapter_word_in_title_body_is_not_cut_as_ad():
+    """标题正文里正常出现「收集」「网站」这类词，不许被广告尾规则误切。
+
+    新规则只认「站点广告形态」（网址、小说站名这类），不是见到广告词就砍。
+    这里钉住反面：书名和章名里带这些词时，标题必须原样保留。
+    """
+    text = _text(
+        "第一章 网站收集员",
+        "",
+        "第一段正文，正常收尾。",
+        "",
+        "第二章 收集回忆的人",
+        "",
+        "第二段正文，正常收尾。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == ["第一章\u3000网站收集员", "第二章\u3000收集回忆的人"], titles
+
+
+def case_duplicate_chapter_same_number_and_same_content_is_merged():
+    """同号**且内容完全相同**的重复章要合并成一条。
+
+    样本《高尔基-童年》里第 10 章在源文件里出现三次，整章正文逐字节相同。
+    开发者口径（2026-11-22）：章号相同、而且内容完全相同，两条都满足才合并。
+
+    正例故意给足 8 段正文：既有的「同名空壳标题合并」只在上一章 <=6 个段落时
+    才动手（那条是给"章首元数据块"用的），这里必须走不到它 —— 否则用例是
+    靠旧规则变绿的，等于没钉住新规则。真书的章都有几百段，同样走不到。
+    """
+    body = ["第%d段正文，内容完全一样。" % i for i in range(1, 9)]
+    text = _text(
+        "第10章 标题十",
+        "",
+        *body,
+        "",
+        "第10章 标题十",
+        "",
+        *body,
+        "",
+        "第11章 标题十一",
+        "",
+        "第十一章的正文。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert titles == ["第10章\u3000标题十", "第11章\u3000标题十一"], titles
+    assert len(res.book.chapters) == 2, titles
+
+
+def case_duplicate_chapter_same_number_different_content_is_kept():
+    """同号但**内容不同**的重复章不许合并 —— 两条都留。
+
+    多卷书每卷章号都从 1 重新数，两个内容不同的「第 1 章」合并就是丢内容。
+    合并判等必须是内容级，不是章号级。
+    """
+    text = _text(
+        "第1章 甲",
+        "",
+        "第一卷的第一段正文，只属于这一章。",
+        "",
+        "第1章 乙",
+        "",
+        "第二卷的第一段正文，与上一章完全不同。",
+    )
+    res = clean_text(text, source="假书.txt")
+    titles = [c.title for c in res.book.chapters]
+    assert len(res.book.chapters) == 2, titles
+    all_text = " ".join(p.text for c in res.book.chapters for p in c.paragraphs)
+    assert "只属于这一章" in all_text and "与上一章完全不同" in all_text, all_text
+
+
+def case_duplicate_chapters_reported_only_when_merged():
+    """重复章合并必须在报告里留痕迹；没有重复时**一个字都不出**。
+
+    为什么钉这条：合并会让章的条数变少，用户第一反应是"我的章呢"。报告里
+    必须能查出"因为源文件把同一章印了多遍，合并了几处"。反过来，没有重复的书
+    也不许冒出"合并了 0 处"这种废话 —— 那只会让人以为哪里出了错。
+    """
+    # 没有重复：不出现这个 code
+    plain = clean_text(
+        _text("第一章 起", "", "正文一。", "", "第二章 止", "", "正文二。"),
+        source="x",
+    )
+    codes = [it["code"] for it in plain.report["warning_items"]]
+    assert "duplicate_chapters" not in codes, codes
+    # 切掉的标题广告计数也不该凭空出现非零值
+    assert plain.report["fixed"]["title_ad_cut_lines"] == 0, plain.report["fixed"]
+
+    # 有重复（同号同内容，8 段正文，绕开"同名空壳合并"的 6 段门槛）：必须报
+    body = ["第%d段正文，内容完全一样。" % i for i in range(1, 9)]
+    dup = clean_text(
+        _text(
+            "第3章 标题三", "", *body,
+            "", "第3章 标题三", "", *body,
+            "", "第4章 标题四", "", "第四章的正文。",
+        ),
+        source="x",
+    )
+    items = [it for it in dup.report["warning_items"] if it["code"] == "duplicate_chapters"]
+    assert len(items) == 1, [it["code"] for it in dup.report["warning_items"]]
+    assert items[0]["count"] == 1, items[0]
+    # 一个用户能看懂的整句：先说几处，再说为什么
+    assert "合并了 1 处内容重复的章节" in items[0]["text"], items[0]["text"]
+    assert "正文逐段一致" in items[0]["text"], items[0]["text"]
+    # 措辞里不许出现"0 处"这种废话
+    assert "合并了 0" not in items[0]["text"], items[0]["text"]
+
+
+# ---------------------------------------------------------------------------
 # 清洗中途检查点（todo/0.3.0.md 的「清洗中途检查点：取消及时生效、卡点能看见」）
 #
 # 界面**仍然不显示进度**（决定 7 不变）。on_step 只服务两件事：让取消在下一次
@@ -4357,6 +4534,13 @@ _CASES = [
     case_star_chapter_lines_are_cut_with_clean_titles,
     case_star_chapter_variant_spelling_is_normalized,
     case_chapter_mention_inside_prose_is_not_a_heading,
+    # 0.3.2 双编号判据收窄 / 书名号章节前缀 / 重复章合并
+    case_title_with_volume_word_after_separator_is_still_a_title,
+    case_book_title_chapter_prefix_is_stripped,
+    case_chapter_word_in_title_body_is_not_cut_as_ad,
+    case_duplicate_chapter_same_number_and_same_content_is_merged,
+    case_duplicate_chapter_same_number_different_content_is_kept,
+    case_duplicate_chapters_reported_only_when_merged,
     # 0.3.0 清洗中途检查点：取消及时生效、卡点能看见
     case_on_step_changes_nothing_when_omitted,
     case_on_step_reports_both_stages,

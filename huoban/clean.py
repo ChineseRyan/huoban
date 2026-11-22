@@ -558,6 +558,23 @@ _HEADING_NUM_ANY = re.compile(
 )
 
 
+def _has_adjacent_heading_numbers(text: str) -> bool:
+    """这一行里是不是有**两个首尾相接**的章节编号（中间一个字符都没有）。
+
+    为什么只认"并列"而不是"出现两个"（0.3.2，用户样本《这个明星来自地球》）：
+    标题正文里带「第X部」这类词很常见 ——「第511章：第二部电影」的两个编号
+    隔着冒号，旧判据（数到 >=2 就拒）把它判成正文，全书少了一章。
+    真正要防的是插图/断行断坏的那种：「第一幕第二幕第三幕」三个编号首尾相接，
+    那才是"一行标了多个编号"的引用形态。
+
+    返回 True 表示这一行不是标题（调用方据此拒掉）。
+    """
+    spans = [m.span() for m in _HEADING_NUM_ANY.finditer(text)]
+    if len(spans) < 2:
+        return False
+    return all(spans[i][1] == spans[i + 1][0] for i in range(len(spans) - 1))
+
+
 def _has_cjk(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
@@ -685,6 +702,18 @@ _SITE_PREFIX_NUM_HEAD = re.compile(
 # 被括号整块包住的字样不可能是正文句的开头，长度可以放宽到 12 字。
 _BRACKETED_PREFIX = re.compile(r"^[【\[（(][^【\[（()）\]】]{1,12}[】\]）)]$")
 
+# 「《书名》章节：第01章」——站点把书名当水印刷在章号前面。
+# 用户样本《高尔基-童年》全书 17 条章行都长这样：
+#   《童年》章节：第01章  收集：名著小说网(Http://www.mingzhuxiaoshuo.com)
+# 前缀「《童年》章节：」squeeze 后 7 字，恰好超过 _SITE_PREFIX_MAX=6 一个字，
+# 于是旧逻辑原样返回 → 行首锚点挂空 → 全书 0 章、5721 段全进前言。
+#
+# 为什么单开一条白名单、**不放宽 _SITE_PREFIX_MAX**：那个上限是所有书的
+# 站点水印判据共用的，放宽一个字会把一堆正文句也当水印剥掉（风险面是全部书）；
+# 而这条形态极窄 —— 必须有书名号、必须有「章节/章回」二字、必须紧跟冒号。
+# 三者缺一不成立，正文句不可能长成这样。
+_BOOK_CHAPTER_PREFIX = re.compile(r"^《[^《》]{1,30}》\s*(?:章节|章回)\s*[：:]")
+
 
 def _title_tail_is_titleish(rest: str) -> bool:
     """剥掉水印前缀之后，剩下这截到底像不像"编号 + 标题"。
@@ -713,6 +742,67 @@ def _title_tail_is_titleish(rest: str) -> bool:
         if not any(ch in _SITE_PREFIX_STOP for ch in tail):
             return True             # "第四节跟踪"
     return False
+
+
+# 章名尾巴上的站点广告：`第01章  收集：名著小说网(Http://www.mingzhuxiaoshuo.com)`。
+#
+# 为什么必须单独一条（0.3.2，用户样本《高尔基-童年》）：剥掉「《童年》章节：」
+# 前缀之后，章名里还挂着「收集：名著小说网(Http://…)」，读者在目录里会看到它。
+# 现有四条广告机制**没有一条能处理**（实测过，不是猜的）：
+#   judge_ad_line    → whole_line=False，还剩 9 个汉字，不是整行广告；
+#   _inline_cut_point → None，切点要求"广告信号前面有句末标点"，这行一个都没有；
+#   cut_inline_ad    → None，同上；
+#   标题豁免         → 代码明写"标题行不切"，只记 ad_title 提醒。
+#
+# 判据收得极窄，三道全过才切：
+#   ① 整行必须有一个网址信号（http:// 或 www.）—— 这是站点广告的硬证据；
+#   ② 编号与网址之间那一截，**整段**只能由广告引导语构成（见 _TITLE_AD_LEAD），
+#      出现任何别的字就说明那是标题正文，一律不动；
+#   ③ 切完剩下的必须还是个非空标题。
+# 所以「第一章 网站收集员」「第二章 收集回忆的人」这类正常标题一个字都不会动 ——
+# 它们既没有网址，第 ② 条也过不去（引导语后面跟着的是标题正文）。
+_TITLE_AD_URL = re.compile(r"(?:[Hh][Tt][Tt][Pp][Ss]?://|www\.)\S*", re.I)
+# 编号之后、网址之前的整段。必须**命中一个广告引导词**才算广告段；
+# 只有"一截短词"不算 —— "第5章 雪夜 http://…" 里「雪夜」是真标题正文，
+# 没有引导词就一定不切（这条是被真实用例逼出来的，别放宽）。
+_TITLE_AD_LEAD = re.compile(
+    r"^[\s\u3000]*"
+    r"(?:收集|更新|整理|录入|校对|转载|来源|出处|首发|下载|手打|排版|本书|小说|章节|文字)"
+    r"[\s\u3000]*[：:]?[\s\u3000]*"
+    r"[\u4e00-\u9fffA-Za-z0-9]{0,12}"
+    r"[\s\u3000]*[（(]?"
+    r"[\s\u3000]*$"
+)
+
+
+def _strip_title_ad_tail(title: str) -> str:
+    """把章名尾巴上的"站点广告 + 网址"切掉；不是那个形态就原样返回。
+
+    只在标题取值这一步调用 —— 全局广告判据一个字都不动，
+    标题豁免这条政策也不放宽（标题仍然不会被整行删掉）。
+
+    样本原样是「第01章  收集：名著小说网(Http://…)」：只切网址会剩
+    「第01章  收集：名著小说网」，读者在目录里照样看到站名。所以连广告段一起切，
+    但切开的位置从**编号之后**算起，编号本身一定保留。
+    """
+    s = title.rstrip()
+    m_url = _TITLE_AD_URL.search(s)
+    if m_url is None:
+        return title                      # ① 没有网址 → 不是站点广告
+    head = s[: m_url.start()]
+    if any(ch in _SITE_PREFIX_STOP for ch in head):
+        return title                      # 段里有句读 → 是正文，不切
+    num = _HEADING_NUM_ANY.match(head.lstrip())
+    if num is None:
+        return title                      # 不以章节编号开头 → 保守不动
+    offset = len(head) - len(head.lstrip())
+    after = head[offset + num.end():]
+    if _TITLE_AD_LEAD.match(after) is None:
+        return title                      # ② 编号后那段不是纯广告引导语 → 不切
+    kept = head[: offset + num.end()].rstrip(" \u3000\t·、：:—-")
+    if not squeeze(kept):
+        return title                      # ③ 切完空了 → 标题不能为空，原样返回
+    return kept
 
 
 # 「第一卷:飞来的艳福 第01章 鸿运赌坊」—— 卷容器与章号挤在同一行。
@@ -749,6 +839,14 @@ def _strip_site_prefix(raw: str) -> str:
     vol = _strip_volume_prefix(s)
     if vol is not None:
         return vol
+    # 「《书名》章节：第01章」这类固定形态的水印（见 _BOOK_CHAPTER_PREFIX）。
+    # 放在"行首能解析就不剥"之前：这种行行首永远解析不出标题，只有剥掉
+    # 书名号那一截才露出章号。形态本身足够窄，不会误伤正常的标题。
+    m_book = _BOOK_CHAPTER_PREFIX.match(s)
+    if m_book is not None:
+        rest = s[m_book.end():].lstrip(" \u3000\t")
+        if _title_tail_is_titleish(rest):
+            return rest
     # 行首本来就能解析出标题 → 不剥。
     # 水印规则是给"锚点挂空、整行认不出标题"的行兜底的。已经在行的中部
     # 找编号再往前剥，会把好标题切坏：《书I》的「1、第1部第1节」先命中
@@ -1082,7 +1180,18 @@ def _heading_of(
     # 站点水印前缀（"正文 第000章：楔子"）会让 parse_heading 的行首锚点挂空，
     # 先剥再解析。_looks_like_sentence 仍看 raw —— 前缀本身常是"这不是标题"的证据
     # （"他说第三章…"剥完也像标题，但整行以句号收尾，那道守卫会把它挡掉）。
-    core = _strip_site_prefix(text)
+    #
+    # 剥前缀优先用 **raw**：normalize_line 会把行内空白全删光，而
+    # 「《童年》章节：第01章  收集：…」这种行，章号与标题正文之间只靠空格分隔 ——
+    # 归一化后成了「第01章收集：…」，既没有分隔符、尾巴又超长，
+    # _title_tail_is_titleish 判它"不像标题"，整本书切不出章。
+    # raw 剥不出东西（结果与原文一样）时再退回 text，原有路径一个字不改。
+    bare_raw = strip_zero_width(raw)
+    stripped_raw = _strip_site_prefix(bare_raw)
+    if stripped_raw != bare_raw:
+        core = stripped_raw
+    else:
+        core = _strip_site_prefix(text)
     # 分部结束标记（「第一部（完）」）不是标题，见 _PART_END_MARKER。
     if _is_part_end_marker(text):
         return None
@@ -1140,14 +1249,22 @@ def _heading_of(
         raw, section_core=core if h.family == _NUM_SECTION_FAMILY else None
     ):
         return None
-    # 一行里出现两个以上章节编号 → 这不是标题，是插图说明/正文引用。
+    # 一行里出现**两个并列**的章节编号 → 这不是标题，是插图说明/正文引用。
     # 反例（《书G》）：插图里断行断坏的「l第一幕第二幕第三幕」，前缀 "l" 被当成
     # 站点水印剥掉，剩下「第一幕第二幕第三幕」正好命中第N章类，于是这一行成了
-    # 一章的标题、还吞掉后面 64 段正文。一个章节标题只标一个编号，两个就是引用。
+    # 一章的标题、还吞掉后面 64 段正文。
+    #
+    # 「并列」= 两个编号**首尾相接**，中间一个字符都没有。为什么必须收到这么窄
+    # （0.3.2）：标题正文里正常带「第X部」这种词的人多地是 —— 用户样本
+    # 《这个明星来自地球》的「第511章：第二部电影」两个编号隔着冒号，
+    # 旧判据照样拦，全书少了一章（744 章、章号 1..745 缺 511）。
+    # 收紧后：三个编号首尾相接那例照旧拦得住（0-3、3-6、6-9），
+    # 隔着分隔符的真标题放行。五本真书全量核过，判定会变的只有那一行。
+    #
     # 数的是**剥过前缀之后**的文本：卷前缀 + 章号同行的那种标题
     # （「第一卷:飞来的艳福 第01章 鸿运赌坊」）天然带两个编号，
     # 拿原文数会把它误杀，而它剥完前缀只剩一个章号。
-    if len(_HEADING_NUM_ANY.findall(core)) >= 2:
+    if _has_adjacent_heading_numbers(core):
         return None
     return h
 
@@ -2606,10 +2723,13 @@ def _scan(
             # 站点水印跑进了章节标题，读者在 EPUB 目录里直接看到它。
             # 取值用 body 而不是 raw：body 已经剥掉段首占位符（"!!!!"），
             # 用 raw 的话四个感叹号会被标点归一并成一个「！」，标题成了「！（一）」。
-            cl = normalize_line(
-                _strip_site_prefix(strip_frame(strip_zero_width(body))),
-                keep_inline_space=True,
-            )
+            #
+            # 顺序：先剥前缀 → 再切广告尾 → 最后才归一化。广告尾判断依赖编号与
+            # 标题正文之间的空格（「第01章  收集：…」），归一化会把它删掉，
+            # 先归一化就再也分不出哪一截是广告了。
+            title_raw = _strip_site_prefix(strip_frame(strip_zero_width(body)))
+            title_raw = _strip_title_ad_tail(title_raw)
+            cl = normalize_line(title_raw, keep_inline_space=True)
         # 场景分隔线（整行只有装饰符号）。它既不是标题也不是正文，
         # 渲染层要单独排版，所以在这里就标出来。
         sep = (
@@ -3698,6 +3818,63 @@ def _guess_metadata(paragraphs: list[Paragraph]) -> tuple[str, str]:
 _STUB_MAX_PARAGRAPHS = 6
 
 
+def _merge_identical_chapters(book: Book) -> int:
+    """把"章号相同、正文也逐段相同"的重复章并成一条；返回并掉的章数。
+
+    为什么需要（0.3.2，用户样本《高尔基-童年》）：源文件里同一章被印了两遍
+    甚至三遍 —— 第 10 章出现三次，三份正文逐字相同。合并后这本书才是 12 章。
+
+    **判等必须是内容级，不许做成"章号相同就合并"**（开发者 2026-11-22 定）：
+    多卷书的每一卷章号都从 1 重新数，两个内容不同的「第 1 章」合并就是丢正文。
+    所以两条同时满足才并：
+      ① 章号相同（两边都必须有编号；没有编号的序章/番外一律不并）；
+      ② 段落文字序列完全相同（逐段比较，空行也算 —— 版面也是内容的一部分）。
+
+    **还必须在同一个卷里**（这一条是既有用例逼出来的）：多卷重编号时，
+    两卷可能各有一个「第1章 山高水长」、正文还一模一样（《书》类语料里真有），
+    跨卷合并会把两卷的章并成一条、读者丢一整段结构。所以遇到 level>=2
+    的卷标题就把作用域重置一次，只在同一卷内比。
+
+    保留**先出现**的那一条（它在原文件里更靠前），start_line 也取它的：
+    后一条是重复印出来的副本，它的位置没有独立意义。
+
+    只做一遍从左往右的扫描，不关心被合并的两条是否相邻 —— 真书里重复章之间
+    往往还夹着别的章（分页错位），要求相邻就一条都并不掉。
+    """
+    if not book.chapters:
+        return 0
+
+    def body_of(ch: model.Chapter) -> tuple[str, ...]:
+        return tuple(p.text for p in ch.paragraphs)
+
+    kept: list[model.Chapter] = []
+    # 作用域键里带上"第几个卷"，换卷就整张表清空（见上面那条注释）。
+    seen: dict[tuple[int, int, tuple[str, ...]], int] = {}
+    volume_seq = 0
+    merged = 0
+    for ch in book.chapters:
+        if ch.level >= 2:
+            # 卷标题本身永远不参与合并，并且开门换作用域。
+            volume_seq += 1
+            seen.clear()
+            kept.append(ch)
+            continue
+        if ch.number is None:
+            kept.append(ch)
+            continue
+        key = (volume_seq, ch.number, body_of(ch))
+        if key in seen:
+            # 已经有一条一模一样的：这一条是重复印刷，丢掉。
+            # 空正文的章也走这条路 —— 两条都空、同号、同卷，同样是一章重复。
+            merged += 1
+            continue
+        seen[key] = len(kept)
+        kept.append(ch)
+    if merged:
+        book.chapters[:] = kept
+    return merged
+
+
 def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book, dict]:
     """把行流切成章节树。
 
@@ -3814,7 +3991,11 @@ def _build_book(items: list[_Line], *, source: str, encoding: str) -> tuple[Book
             book.title = fname_title
         if not book.author:
             book.author = fname_author
-    return book, {}
+    # 整章重复：源文件把同一章印了两遍甚至三遍（分页扫描合并时的常见残迹），
+    # 章号相同**而且**正文逐段完全相同才合并。见 _merge_identical_chapters。
+    # 合并数经第二个返回值交给报告 —— 不许静默合并，用户得知道章为什么少了。
+    merged_duplicates = _merge_identical_chapters(book)
+    return book, {"duplicate_chapters": merged_duplicates}
 
 
 # ---------------------------------------------------------------------------
@@ -3943,6 +4124,7 @@ def _build_report(
     toc_unsure: bool = False,
     verse_lines: int = 0,
     ad_title: int = 0,
+    duplicate_chapters: int = 0,
     wrap_reject: int = 0,
     wrap_suspect: int = 0,
     dropped_lines: list[dict] | None = None,
@@ -3981,12 +4163,35 @@ def _build_report(
         })
     # 章节标题里带广告词/网址：标题是结构，不能删也不能切，只能请人看一眼。
     # 这类标题会原样进 EPUB 的目录，读者一眼就能看见。
-    if ad_title:
+    #
+    # 这里**重算一遍**、不用 _scan 数出来的那个数（0.3.2）：_scan 是逐行判的，
+    # 那时还不知道标题最后会被取成什么样 —— 站点广告尾（「第01章  收集：某站
+    # (http://…)」）在取值那一步会被 _strip_title_ad_tail 切掉，切完之后标题
+    # 干净了，再说"标题未作改动"就是假话。所以按**最终章名**数：
+    # 切完仍带广告信号的才提醒（措辞对它们永远成立），切掉的另记进 fixed。
+    ad_title_left = sum(
+        1 for ch in book.chapters if judge_ad_line(ch.title, 0) is not None
+    )
+    ad_title_cut = max(0, ad_title - ad_title_left)
+    if ad_title_left:
         warning_items.append({
             "code": "ad_title",
             "level": model.LEVEL_ORDER,
-            "text": f"有 {ad_title} 个章节标题里夹着广告词或网址，标题未作改动，请人工核对",
-            "count": ad_title,
+            "text": f"有 {ad_title_left} 个章节标题里夹着广告词或网址，标题未作改动，请人工核对",
+            "count": ad_title_left,
+        })
+    # 整章重复被合并：源文件把同一章印了多遍，合并后章的条数会变少。
+    # **必须留这一行痕迹**（开发者 2026-11-22）：用户看到"章怎么少了"，
+    # 报告里得能查出原因，否则就是静默丢结构。
+    # 判据说清楚（章号相同 + 正文逐段一致），免得用户以为我们乱删。
+    # 没有重复时这一条根本不 append —— 不出现"合并了 0 处"这种废话。
+    if duplicate_chapters:
+        warning_items.append({
+            "code": "duplicate_chapters",
+            "level": model.LEVEL_ORDER,
+            "text": f"合并了 {duplicate_chapters} 处内容重复的章节（章号相同、正文逐段一致）："
+                    "源文件把同一章印了多遍",
+            "count": duplicate_chapters,
         })
     # 疑似目录却一条都没敢删：这类漏删如果不说，用户在报告里完全看不见，
     # 只会觉得"输出里怎么多了几个空章节"。宁可多一句嘴。
@@ -4151,6 +4356,10 @@ def _build_report(
         "oneline": oneline
         or {"long_line_count": 0, "lines_with_multiple_chapters": 0, "suspected": False},
         "fixed": {**fixed, "inline_ad_cut_lines": ad_inline_cut,
+                  # 章标题尾巴上被切掉的站点广告条数（见 _strip_title_ad_tail）。
+                  # 与 ad_title 互补：那一条只说"切完仍夹着广告的、没敢动的"，
+                  # 这一条说"已经切掉的"，两边加起来才是当初带广告的标题总数。
+                  "title_ad_cut_lines": ad_title_cut,
                   "wrap_chunk_reject_lines": wrap_reject,
                   # 形态像硬折行假标题、但**没能确认**（在段首、或并不回上一段）
                   # 的行数。它们一律原样保留、章节结构不动 —— 这属语义判断，
@@ -4403,7 +4612,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
     # 已经被合并掉的行上。标完立刻组装章节树，中间不要再插入任何改行序的步骤。
     verse_lines = _mark_verse(items)
     items = _fold_single_blanks(items)
-    book, _ = _build_book(items, source=source, encoding=encoding)
+    book, build_info = _build_book(items, source=source, encoding=encoding)
 
     fixed = _scan_fixed(lines)
     blank_in = sum(1 for ln in lines if not strip_zero_width(ln).strip())
@@ -4441,6 +4650,7 @@ def clean_text(text: str, *, source: str = "", encoding: str = "utf-8",
         oneline=oneline,
         toc_unsure=toc_unsure,
         verse_lines=verse_lines,
+        duplicate_chapters=build_info.get("duplicate_chapters", 0),
         wrap_reject=wrap_rejected + ad_info["wrap_head_dropped"],
         wrap_suspect=max(0, ad_info["wrap_gate_hit"] - wrap_rejected),
         dropped_lines=sorted(
